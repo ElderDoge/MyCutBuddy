@@ -246,7 +246,7 @@ var CredentialStore = class {
         return emptyStore();
       throw localInputError("credential_store_unreadable", `\u672C\u673A\u51ED\u636E\u6587\u4EF6\u65E0\u6CD5\u8BFB\u53D6\uFF1A${this.filePath}`);
     }
-    if (permissionsOf(this.filePath) & FORBIDDEN_PERMISSION_BITS)
+    if (process.platform !== "win32" && permissionsOf(this.filePath) & FORBIDDEN_PERMISSION_BITS)
       throw localInputError(
         "credential_store_insecure",
         `\u672C\u673A\u51ED\u636E\u6587\u4EF6\u6743\u9650\u4E0D\u5B89\u5168\uFF08\u9700\u8981\u4EC5\u672C\u4EBA\u53EF\u8BFB\u5199\uFF09\uFF1A${this.filePath}\u3002\u8BF7\u5220\u9664\u8BE5\u6587\u4EF6\u540E\u91CD\u65B0\u6388\u6743\u3002`
@@ -543,7 +543,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.3.4";
+var CLI_VERSION = "0.3.5";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
@@ -1316,7 +1316,7 @@ var PendingSubmissionStore = class {
     rmSync4(path, { force: !0 });
   }
   ensureDirectory() {
-    if (mkdirSync3(this.directory, { recursive: !0, mode: PENDING_DIRECTORY_MODE }), statSync3(this.directory).mode & FORBIDDEN_PERMISSION_BITS2)
+    if (mkdirSync3(this.directory, { recursive: !0, mode: PENDING_DIRECTORY_MODE }), process.platform !== "win32" && statSync3(this.directory).mode & FORBIDDEN_PERMISSION_BITS2)
       throw localInputError(
         "pending_submission_store_insecure",
         `\u672C\u673A\u5F85\u7528\u63D0\u4EA4\u952E\u76EE\u5F55\u6743\u9650\u4E0D\u5B89\u5168\uFF08\u9700\u8981\u4EC5\u672C\u4EBA\u53EF\u8BBF\u95EE\uFF09\uFF1A${this.directory}`
@@ -1331,7 +1331,7 @@ var PendingSubmissionStore = class {
         return null;
       throw localInputError("pending_submission_store_unreadable", `\u672C\u673A\u5F85\u7528\u63D0\u4EA4\u952E\u65E0\u6CD5\u8BFB\u53D6\uFF1A${path}`);
     }
-    if (statSync3(path).mode & FORBIDDEN_PERMISSION_BITS2)
+    if (process.platform !== "win32" && statSync3(path).mode & FORBIDDEN_PERMISSION_BITS2)
       throw localInputError(
         "pending_submission_store_insecure",
         `\u672C\u673A\u5F85\u7528\u63D0\u4EA4\u952E\u6743\u9650\u4E0D\u5B89\u5168\uFF08\u9700\u8981\u4EC5\u672C\u4EBA\u53EF\u8BFB\u5199\uFF09\uFF1A${path}`
