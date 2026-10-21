@@ -42,7 +42,7 @@
 ## 安装
 
 ```bash
-npx skills add ElderDoge/MyCutBuddy
+npx skills add mycutbuddy/MyCutBuddy
 ```
 
 适合 Windows 和 MacOS。
@@ -61,5 +61,3 @@ npx skills add ElderDoge/MyCutBuddy
 
 - 本地草稿安装需要 Agent 具备这台电脑的文件访问权限；纯云端环境只能提供下载信息与手动安装步骤。
 - 同一套剪辑能力另有网页工作台入口，但本 Skill 面向 Agent 操作。
-
-站点：<https://test.jiandazi.com>（2026 年 10 月内测站）。正式站开放后优先使用 https://www.jiandazi.com。
