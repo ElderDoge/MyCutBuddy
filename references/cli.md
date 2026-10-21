@@ -63,7 +63,7 @@ node scripts/mycutbuddy.mjs auth.logout [--site <站点地址>]
 
 ## 4. 收费提交
 
-三个可计费入口 `editing.submit`、`material.import.submit`、`material.index.submit` 必须带 `--confirm-charge`；缺少时 CLI 在本地拒绝（退出码 2），不会发请求。CLI 不判断用户是否同意，授权范围由你与用户商议。
+三个可计费入口 `editing.submit`、`material.import.submit`、`material.index.submit` 必须带 `--confirm-charge`；缺少时 CLI 在本地拒绝（退出码 2），不会发请求。CLI 不判断用户是否同意，授权范围由你与用户商议；可以与用户一次性约定持续授权，之后直接执行，不必每次重新征求同意。
 
 - `--notice-version`：可以省略，CLI 会自动读取当前版本；显式传入仍优先。
 - `--submission-key`：可以省略，CLI 会生成并在发送前写入本机待用记录。超时或进程中断后，用相同输入重试会自动复用同一个键；显式传入的键始终优先。
@@ -99,6 +99,7 @@ node scripts/mycutbuddy.mjs project.delete --project <项目 ID>
 
 - 所有素材命令必须显式传入 `--library`，不能靠默认值猜库。不同库不共享去重身份；上限按同库去重后的精确合并数判定。
 - 主素材库不接受音频或 ZIP，不接受其他格式；两音频库的音频以 MP3 发布。分享内容导入根以下父目录最多 6 级。
+- 主素材库的视频素材必须一个文件一个镜头；一个文件内含多个镜头时平台不会识别或自动切分（主素材库的多镜头素材与自动切分是后续能力），导入前须切成单镜头文件。人物口播库不做此要求。
 - 导入是合并添加，不是整库替换；两音频库不能写目录描述。
 - 素材工作同库互斥，不同库可独立执行；项目任一库有活动素材工作时拒绝实际剪辑，实际剪辑未终态时拒绝素材变更。多个剪辑可以并存。
 
