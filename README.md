@@ -41,6 +41,12 @@
 
 ## 安装
 
+把下面这句话发给你的 Agent：
+
+> 请帮我安装 mycutbuddy/MyCutBuddy 这个 skill
+
+也可以让 Agent 按自己的技能安装方式处理，或在终端执行：
+
 ```bash
 npx skills add mycutbuddy/MyCutBuddy
 ```
@@ -61,3 +67,7 @@ npx skills add mycutbuddy/MyCutBuddy
 
 - 本地草稿安装需要 Agent 具备这台电脑的文件访问权限；纯云端环境只能提供下载信息与手动安装步骤。
 - 同一套剪辑能力另有网页工作台入口，但本 Skill 面向 Agent 操作。
+
+## 许可证
+
+MIT，详见 [LICENSE](LICENSE)。
