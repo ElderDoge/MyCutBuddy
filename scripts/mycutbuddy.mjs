@@ -517,7 +517,7 @@ ${JSON.stringify(error.details, null, 2)}
 }
 
 // packages/mycutbuddy-cli/src/core/site.ts
-var DEFAULT_SITE = "https://www.jiandazi.com", LOOPBACK_HOSTNAMES = { "127.0.0.1": !0, localhost: !0, "[::1]": !0 };
+var DEFAULT_SITE = "https://test.jiandazi.com", LOOPBACK_HOSTNAMES = { "127.0.0.1": !0, localhost: !0, "[::1]": !0 };
 function normalizeSite(raw = DEFAULT_SITE) {
   let value = raw.trim();
   if (value.length === 0)
@@ -543,7 +543,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.2.0";
+var CLI_VERSION = "0.3.0";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
@@ -1142,10 +1142,10 @@ async function installDraftPackage(options) {
 
 // packages/mycutbuddy-cli/src/commands/definition.ts
 var OPTION_DESCRIPTIONS = {
-  site: "\u76EE\u6807\u7AD9\u70B9\u5730\u5740\uFF1B\u751F\u4EA7\u53EA\u63A5\u53D7 HTTPS\uFF0C\u672C\u5730\u5F00\u53D1\u53EA\u63A5\u53D7 loopback HTTP\u3002\u7701\u7565\u65F6\u4F7F\u7528 MYCUTBUDDY_SITE \u6216\u9ED8\u8BA4\u7AD9\u70B9\u3002",
+  site: "\u76EE\u6807\u7AD9\u70B9\u5730\u5740\uFF1B\u5FC5\u987B\u4F7F\u7528 https\uFF0C\u672C\u673A\u8054\u8C03\u53EF\u7528 127.0.0.1\u3002\u7701\u7565\u65F6\u4F7F\u7528 MYCUTBUDDY_SITE \u6216\u9ED8\u8BA4\u7AD9\u70B9\u3002",
   format: "\u8F93\u51FA\u683C\u5F0F\uFF1Ajson\uFF08\u9ED8\u8BA4\uFF0C\u7A33\u5B9A\u4FE1\u5C01\uFF09\u6216 human\u3002",
   pretty: "JSON \u8F93\u51FA\u7F29\u8FDB\u3002",
-  timeout: "\u5355\u6B21 HTTP \u8BF7\u6C42\u8D85\u65F6\u79D2\u6570\uFF081\u2013600\uFF0C\u9ED8\u8BA4 20\uFF09\u3002",
+  timeout: "\u5355\u6B21\u8BF7\u6C42\u8D85\u65F6\u79D2\u6570\uFF081\u2013600\uFF0C\u9ED8\u8BA4 20\uFF09\u3002",
   help: "\u663E\u793A\u8BE5\u547D\u4EE4\u7684\u7528\u6CD5\u3001\u8F93\u5165\u7ED3\u6784\u4E0E\u540E\u7EED\u547D\u4EE4\u3002",
   version: "\u663E\u793A\u672C\u5730 CLI \u7248\u672C\u5E76\u9000\u51FA\u3002",
   project: "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list\u3002",
