@@ -43,12 +43,12 @@
 
 把下面这句话发给你的 Agent：
 
-> 请帮我安装 mycutbuddy/MyCutBuddy 这个 skill
+> 请帮我安装 mycutbuddy/MyCutBuddy 这个 skill（Gitee 或 GitHub）
 
 也可以让 Agent 按自己的技能安装方式处理，或在终端执行：
 
 ```bash
-npx skills add mycutbuddy/MyCutBuddy
+npx skills add https://gitee.com/mycutbuddy/mycutbuddy.git
 ```
 
 适合 Windows 和 MacOS。
