@@ -517,7 +517,7 @@ ${JSON.stringify(error.details, null, 2)}
 }
 
 // packages/mycutbuddy-cli/src/core/site.ts
-var DEFAULT_SITE = "https://test.jiandazi.com", LOOPBACK_HOSTNAMES = { "127.0.0.1": !0, localhost: !0, "[::1]": !0 };
+var DEFAULT_SITE = "https://www.jiandazi.com", LOOPBACK_HOSTNAMES = { "127.0.0.1": !0, localhost: !0, "[::1]": !0 };
 function normalizeSite(raw = DEFAULT_SITE) {
   let value = raw.trim();
   if (value.length === 0)
@@ -543,7 +543,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.3.7";
+var CLI_VERSION = "0.3.8";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {

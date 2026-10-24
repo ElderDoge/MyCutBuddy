@@ -22,7 +22,7 @@ compatibility: 使用 Skill 中的 CLI（Skill 根目录下 `node scripts/mycutb
 
 ## 站点
 
-默认连接 `https://test.jiandazi.com`（2026 年 10 月的内测站）。正式站开放后优先使用 `https://www.jiandazi.com`；旧版 Skill 可用 `--site` 或 `MYCUTBUDDY_SITE` 指定，不必等升级。用户明确指定其他站点时按用户指定。
+默认连接 `https://www.jiandazi.com`（正式站）。可用 `--site` 或环境变量 `MYCUTBUDDY_SITE` 指定其他站点，只有用户明确指定时才覆盖默认。凭据按站点隔离：以前在内测站 `test.jiandazi.com` 授权得到的本机凭据属于该站点，不会在正式站复用或改写，在正式站首次使用需要重新走一次[账号授权](references/authentication.md)。
 
 ## 工作流程
 

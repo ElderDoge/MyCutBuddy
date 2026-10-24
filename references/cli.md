@@ -14,7 +14,7 @@ node scripts/mycutbuddy.mjs <命令> [选项]
 
 - 命令目录与入参结构以 `help` 输出为准；`help <命令 ID>` 返回选项说明、`--input` 字段结构、示例和后续命令，不要凭记忆拼字段。`version` 输出本地 CLI 版本。
 - 全局参数：`--site <站点地址>`（或环境变量 `MYCUTBUDDY_SITE`）、`--format json|human`、`--pretty`、`--timeout <秒>`、`--version`、`--help`。全局参数可以放在命令前或命令后。
-- 默认连接 `https://test.jiandazi.com`（2026 年 10 月内测站）。正式站开放后优先使用 `https://www.jiandazi.com`，旧版 Skill 可用 `--site` 指定。只有用户明确传入其他站点时才覆盖默认。
+- 默认连接 `https://www.jiandazi.com`（正式站）。只有用户明确传入其他站点时才用 `--site` 或 `MYCUTBUDDY_SITE` 覆盖默认；内测站凭据不会在正式站复用，正式站首次使用需重新授权。
 - 站点地址必须是 `https://`；本机联调可用 `http://127.0.0.1:<port>`。
 - 面向用户和日志的报告使用命令 ID、业务状态与错误码，不展示或保存任何凭据。
 

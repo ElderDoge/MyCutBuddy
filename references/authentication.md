@@ -5,7 +5,7 @@
 ## 1. 适用前提
 
 - CLI 位于 Skill 根目录的 `scripts/mycutbuddy.mjs`，统一用 `node scripts/mycutbuddy.mjs <命令>` 调用，要求用户电脑 Node ≥20。授权只通过 CLI 完成。
-- 默认连接 `https://test.jiandazi.com`（2026 年 10 月内测站）。正式站开放后优先使用 `https://www.jiandazi.com`，可用 `--site <站点地址>` 或环境变量 `MYCUTBUDDY_SITE` 指定。
+- 默认连接 `https://www.jiandazi.com`（正式站）。可用 `--site <站点地址>` 或环境变量 `MYCUTBUDDY_SITE` 指定其他站点；只有用户明确指定时才覆盖默认。
 - 站点地址必须是 `https://`；只有本机联调可用 `http://127.0.0.1:<port>`。
 - 能否运行 CLI、能否写入本地凭据目录，取决于用户当前的 Agent/Skill 平台。平台不满足要求时按第 5 节停止并说明。
 - 站点未提供 Agent 授权能力时，如实报告“站点暂不支持该能力”。
@@ -40,6 +40,7 @@ node scripts/mycutbuddy.mjs auth.login --name <Agent 名称> [--site <站点地�
 
 - 默认凭据目录为 `~/.mycutbuddy`；可用 `MYCUTBUDDY_CLI_HOME` 指定其他位置。CLI 以仅本人可读写的权限创建目录与凭据文件。
 - 凭据按站点隔离保存；同一台机器可以保存多个站点的授权，互不覆盖。`auth.list` 只列出站点与凭据事实，不含令牌；切换或删除某个站点的本机凭据用 `auth.logout --site <站点地址>`，不影响其他站点。
+- 站点切换不会迁移凭据：以前在内测站 `test.jiandazi.com` 授权得到的本机凭据只属于内测站，不会在正式站被复用、复制或改写；在正式站首次使用需要重新执行 `auth.login --wait`，由用户批准新凭据。
 - `auth.status` 读取本机凭据事实；加 `--probe` 会执行一次允许的只读业务调用，确认站点是否仍接受该凭据。
 - 凭据有效期固定 30 天，从授权成功时起算，不能刷新、不会滑动续期。到期后重新执行 `auth.login --wait`。
 - `auth.logout` 只删除本机保存的凭据，不撤销网站上的授权；网站上的授权在到期或被用户撤销前仍然有效。需要真正撤销时，请用户到网站“Agent 授权”列表操作（`/zh/dashboard?tab=agent-authorizations`，仅接受浏览器登录，Agent 无法代替）。
@@ -51,6 +52,7 @@ node scripts/mycutbuddy.mjs auth.login --name <Agent 名称> [--site <站点地�
 - 过期或无效：重新运行 `auth.login --wait`，让用户批准新凭据。
 - 已撤销：说明用户已在网站撤销该授权，重新授权需要用户再次明确批准。
 - 站点不匹配或误用其他站点凭据时，明确当前 `--site`，让用户确认目标站点。
+- 从内测站切到正式站后本机没有正式站凭据属于正常情况：按当前默认站点重新运行 `auth.login --wait` 让用户批准，不要为了沿用旧凭据而显式指定内测站，也不要把旧站凭据复制或改名。
 - 任何授权失败都不是业务失败：不要把它当作任务被拒绝，也不要为了“继续”而重复提交收费操作。
 
 ## 5. 凭据保密
