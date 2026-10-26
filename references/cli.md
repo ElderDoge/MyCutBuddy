@@ -99,7 +99,7 @@ node scripts/mycutbuddy.mjs project.delete --project <项目 ID>
 
 - 所有素材命令必须显式传入 `--library`，不能靠默认值猜库。不同库不共享去重身份；上限按同库去重后的精确合并数判定。
 - 主素材库不接受音频或 ZIP，不接受其他格式；两音频库的音频以 MP3 发布。分享内容导入根以下父目录最多 6 级。
-- 主素材库的视频素材必须一个文件一个镜头；一个文件内含多个镜头时平台不会识别或自动切分（主素材库的多镜头素材与自动切分是后续能力），导入前须切成单镜头文件。人物口播库不做此要求。
+- 主素材库可以接收一个文件里包含多个镜头的素材（成片、宣传片、多镜头录屏）：提交索引前先按其状态选择处理或仅索引，见「主素材库的镜头处理」。人物口播库不处理镜头，只做索引。
 - 导入是合并添加，不是整库替换；两音频库不能写目录描述。
 - 素材工作同库互斥，不同库可独立执行；项目任一库有活动素材工作时拒绝实际剪辑，实际剪辑未终态时拒绝素材变更。多个剪辑可以并存。
 
@@ -127,9 +127,9 @@ node scripts/mycutbuddy.mjs project.delete --project <项目 ID>
 
 - 单个点合法：`a.b.mp4`、`1.wav.mp3` 都能正常导入；只有连续两个点会被拒绝。语音配音库填写路径时省略最后一个 `.mp3`。
 - 主素材库的文本文件只有文件名完全等于 `上下文.txt` 才被接受，其他文本文件按辅助文件忽略。
-- 命中整次失败时，把失败摘要里的安全相对路径翻成用户语言，让用户删除、改名、切分或换库后重新分享并导入；不要自行改名或替用户丢弃素材，也不要反复重试同一份分享（同一份分享的结果不会变）。
+- 命中整次失败时，把失败摘要里的安全相对路径翻成用户语言，让用户删除、改名或换库后重新分享并导入；不要自行改名或替用户丢弃素材，也不要反复重试同一份分享（同一份分享的结果不会变）。
 
-`material.directory` 返回当前库摘要、`safe_material_directory`、`locked`、活动工作、索引状态、当前计费提示与余额；写入前必须读取它，发生锁定、索引过期或资源归档时说明真实原因。带 `--task <任务 ID>` 时读取该管理任务的 `status`，并重读目录确认结果。
+`material.directory` 返回当前库摘要、`safe_material_directory`、`locked`、活动工作、索引状态、当前计费提示与余额；主素材库另有 `unprocessed_video_count`、`primary_shot_notice_version` 与 `shot_processing`。写入前必须读取它，发生锁定、索引过期或资源归档时说明真实原因。带 `--task <任务 ID>` 时读取该管理任务的 `status`，并重读目录确认结果。
 
 ### 素材导入与索引
 
@@ -140,9 +140,37 @@ node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confir
 
 - 导入输入必须包含真实分享链接、目标 `library_type` 与按需的提取码；链接自带提取码时以链接中的为准。分享内容必须来自 `pan.baidu.com` 的 `/s/` 或 `/e/` 链接，不接受其他站点或伪造链接。
 - 导入完成后读取目标库目录再整理。`prepared` 只表示准备完成，不能称为已导入；上传成功与受理回执也不代表已入库。
-- 索引仅支持 `primary` 与 `talking_head`；`voiceover` 不调用索引。导入不自动索引。
+- 索引仅支持 `primary` 与 `talking_head`；`voiceover` 没有索引，CLI 在本地拒绝并说明原因。导入不自动索引。
 - 索引只处理启用且待索引/过期的素材。修改主库目录描述会使相关索引过期：先保存修改，再按新范围索引。
 - 费用与扣费见 [积分与计费](billing.md)，上传与分享见 [网盘与草稿](baidu-drive-and-drafts.md)。
+
+### 主素材库的镜头处理
+
+只有主素材库接受镜头参数。人物口播库只索引，传 `shot_mode` 或 `additional_prompt` 会被本地拒绝；语音配音库没有索引。
+
+先读 `material.directory --library primary`，它返回 `unprocessed_video_count`（未处理视频数）、节点能力与当前提示版本，以及 `shot_processing` 的阶段、失败阶段、安全摘要、独立处理/索引任务身份、费用和差额。按真实状态三选一；有新未处理视频时优先处理新源，旧暂停记录不能覆盖新库事实：
+
+| 状态 | 提交 |
+|---|---|
+| `unprocessed_video_count > 0` | 处理并索引：`{"library_type":"primary","shot_mode":"single\|multi\|mixed","additional_prompt":"可选"}` |
+| 没有未处理视频、有待索引或过期素材 | 更新索引：`{"library_type":"primary"}` |
+| `shot_processing.stage=awaiting_index_credits` | 继续索引：补足积分后 `{"library_type":"primary"}` |
+
+```text
+node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confirm-charge \
+  --input '{"library_type":"primary","shot_mode":"mixed","additional_prompt":"去除所有人物口播画面，只保留产品画面"}'
+```
+
+- `single`：连续拍摄、一个文件一个镜头；不分析、不裁剪，只记处理完成，处理费为 0。
+- `multi`：一个文件里有多个镜头（成片、宣传片）；直接按镜头分割。
+- `mixed`：不确定或有长录屏；先免费分类，只分割多镜头与长镜头，短镜头原样保留。
+- `additional_prompt` 必须与 `shot_mode` 一起提交，说明本次要保留或去除的画面；没有要求就省略或留空字符串。
+- 一次 `--confirm-charge` 同时授权分割处理与随后自动进行的索引；服务端在分割成功提交后按真实素材核价并直接进入索引，不需要第二次确认。
+- 处理费只按需分割的源视频真实总时长计，索引费按分割后的可索引素材单独计；具体公式见 [积分与计费](billing.md)。CLI 只转发服务端字段，不计算价格、余额或差额。
+- 分割成功但索引积分不足时，请求持久停在 `awaiting_index_credits`：目录、处理标记和已付处理费都保留，只差索引。补足积分后按上表的「继续索引」显式提交；不要重传 `shot_mode`，不要重新导入，也不要指望充值或查询自动继续。
+- 处理在提交前失败或被取消时素材库保持原状，已收处理费按服务端账本返还；分割成功后索引失败只退索引阶段，片段与处理标记保留。取消与提交竞争时以服务端最终结果为准。
+- `failure_stage=index` 表示分割已经成功，仅索引失败；保留片段和处理费，当前没有新未处理视频时只传 `library_type=primary` 更新索引，不重新选择镜头模式。
+- `task.watch` 只观察其任务自身的终态，返回的 `shot_processing` 是父链当前事实；处理任务完成时索引可能仍运行。整链使用 `request.watch`，阶段任务使用服务端实际返回的 `process_task_id` 或 `index_task_id`，不能猜任务 ID。
 
 ### 素材整理
 
@@ -261,7 +289,10 @@ node scripts/mycutbuddy.mjs request.recreate --project <项目 ID> --request <�
 ```
 
 - 请求状态：`quoting`、`ready`、`submitted`、`failed`、`cancelled`。`submitted` 只表示关联执行已创建，后续查执行/素材库，不把它当执行成功；失败时读取安全摘要与实际积分事实。
-- `request.watch` 观察计费请求，直到 `submitted`/`failed`/`cancelled` 或窗口结束；素材导入/索引继续读 `material.directory`，剪辑执行用 `task.watch`。
+- `request.watch` 对普通请求观察到 `submitted`/`failed`/`cancelled` 或窗口结束；素材导入/索引的执行任务用 `task.watch` 读自身终态，库级事实读 `material.directory`，剪辑执行也用 `task.watch`。
+- 主库镜头请求会返回 `shot_processing` 与 `shot_processing_stage`。`request.watch` 在这类请求上继续观察准备、分割和随后的索引阶段，`submitted`、处理完成、`indexing` 都不算整链完成；停在 `completed`、`failed`、`cancelled` 或 `awaiting_index_credits`。输出带 `shot_stage_label`（中文阶段）与 `shot_next_step`（下一步），索引不足时还有 `index_credits_insufficient` 警告，写明本次所需积分、余额与差额。
+- 观察到 `awaiting_index_credits` 表示分割已完成、只差索引：按 `shot_next_step` 补足积分后显式提交仅索引请求，观察命令不会自动提交或重扣。窗口结束只报 `watch_incomplete`，不能据此判断完成。
+- `task.watch` 只陈述单个任务的阶段；任务 `completed` 不等于整条镜头处理链完成，整链阶段以 `request.watch` 的标志为准。素材导入与独立索引的执行任务也可用 `task.watch` 读到自身终态（返回 `task_type`、`request_id`、`import_stage`、积分与终态原因），库级事实仍读 `material.directory`。
 - `request.cancel` 只在请求尚未进入执行时生效；若返回状态不是 `cancelled`，结果会带 `cancel_not_effective` 警告，已创建的执行任务改用 `task.cancel` 查询可取消性。停止查询不等于取消，受理取消不等于清理完成。退款以平台账单为准，不能自行承诺全退。
 
 ```text

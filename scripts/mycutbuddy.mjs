@@ -46,7 +46,7 @@ var MATERIAL_LIBRARY_TYPES = ["primary", "talking_head", "voiceover"], EDITING_F
   "refund",
   "bonus",
   "adjustment"
-], NARRATION_AUDIO_SOURCES = ["tts", "upload"], TASK_PAGE_SIZES = [20, 30, 50], DEFAULT_TASK_PAGE_SIZE = 20, MAX_BATCH_ROWS = 200;
+], NARRATION_AUDIO_SOURCES = ["tts", "upload"], MATERIAL_SHOT_MODES = ["single", "multi", "mixed"], TASK_PAGE_SIZES = [20, 30, 50], DEFAULT_TASK_PAGE_SIZE = 20, MAX_BATCH_ROWS = 200;
 function isMaterialLibraryType(value) {
   return typeof value == "string" && MATERIAL_LIBRARY_TYPES.includes(value);
 }
@@ -543,7 +543,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.3.8";
+var CLI_VERSION = "0.3.9";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
@@ -1403,12 +1403,40 @@ function noticeVersionFromFacts(kind, input, facts) {
   if (kind === "material_import")
     return readStringField(facts, "material_import_notice_version");
   if (kind === "material_index")
-    return readStringField(facts, "billing_notice_version");
+    return readStringField(facts, input.shot_mode === void 0 ? "billing_notice_version" : "primary_shot_notice_version");
   let talkingHeadPath = readStringField(input, "talking_head_path");
   return readStringField(
     facts,
     talkingHeadPath !== void 0 && TALKING_HEAD_PATHS[talkingHeadPath] === !0 ? "talking_head_notice_version" : "billing_notice_version"
   );
+}
+function validateMaterialIndexInput(input) {
+  if (input.library_type === "voiceover")
+    throw localInputError(
+      "invalid_payload",
+      "\u8BED\u97F3\u914D\u97F3\u5E93\u6CA1\u6709\u7D20\u6750\u7D22\u5F15\uFF1A\u5B83\u53EA\u5B58\u653E\u914D\u97F3\u97F3\u9891\uFF0C\u5BFC\u5165\u5B8C\u6210\u5373\u5C31\u7EEA\uFF1B\u7D22\u5F15\u53EA\u80FD\u9009\u62E9 primary \u6216 talking_head\u3002"
+    );
+  let shotMode = input.shot_mode, hasPrompt = input.additional_prompt !== void 0;
+  if (shotMode === void 0) {
+    if (hasPrompt)
+      throw localInputError(
+        "invalid_payload",
+        "input.additional_prompt \u53EA\u80FD\u4E0E input.shot_mode \u4E00\u8D77\u63D0\u4EA4\uFF1B\u4EC5\u7D22\u5F15\u8BF7\u53EA\u4F20 library_type\u3002"
+      );
+    return;
+  }
+  if (input.library_type !== "primary")
+    throw localInputError(
+      "invalid_payload",
+      "\u53EA\u6709\u4E3B\u7D20\u6750\u5E93\uFF08primary\uFF09\u53EF\u4EE5\u63D0\u4EA4 shot_mode\uFF1B\u4EBA\u7269\u53E3\u64AD\u5E93\u53EA\u80FD\u7D22\u5F15\uFF0C\u8BED\u97F3\u914D\u97F3\u5E93\u6CA1\u6709\u7D22\u5F15\u3002"
+    );
+  if (typeof shotMode != "string" || !MATERIAL_SHOT_MODES.includes(shotMode))
+    throw localInputError(
+      "invalid_payload",
+      `input.shot_mode \u53EA\u652F\u6301\uFF1A${MATERIAL_SHOT_MODES.join("\u3001")}\u3002`
+    );
+  if (hasPrompt && typeof input.additional_prompt != "string")
+    throw localInputError("invalid_payload", "input.additional_prompt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u6CA1\u6709\u7279\u6B8A\u8981\u6C42\u8BF7\u7559\u7A7A\u3002");
 }
 function validateEditingInput(input) {
   let source = input.audio_source;
@@ -1423,7 +1451,7 @@ function validateEditingInput(input) {
 }
 function inputSummary(kind, input) {
   let summary = {};
-  return typeof input.library_type == "string" && (summary.library_type = input.library_type), kind === "editing" && (typeof input.audio_source == "string" && (summary.audio_source = input.audio_source), summary.row_count = Array.isArray(input.rows) ? input.rows.length : 1), summary;
+  return typeof input.library_type == "string" && (summary.library_type = input.library_type), kind === "editing" && (typeof input.audio_source == "string" && (summary.audio_source = input.audio_source), summary.row_count = Array.isArray(input.rows) ? input.rows.length : 1), kind === "material_index" && typeof input.shot_mode == "string" && (summary.shot_mode = input.shot_mode, summary.has_additional_prompt = typeof input.additional_prompt == "string" && input.additional_prompt.length > 0), summary;
 }
 async function submitChargeableWork(context, route, kind) {
   if (context.values["confirm-charge"] !== !0)
@@ -1435,7 +1463,7 @@ async function submitChargeableWork(context, route, kind) {
     required: !0,
     hint: "\u670D\u52A1\u7AEF\u63A5\u53D7\u7684 input \u5BF9\u8C61\uFF08\u4E0E\u7F51\u9875\u5DE5\u4F5C\u53F0\u76F8\u540C\u7684\u5B57\u6BB5\uFF09"
   }), projectId = requiredStringOption(context.values, "project", "\u9879\u76EE ID");
-  kind === "editing" && validateEditingInput(input);
+  kind === "editing" && validateEditingInput(input), kind === "material_index" && validateMaterialIndexInput(input);
   let explicitKey = optionString(context.values, "submission-key");
   if (explicitKey !== void 0 && !SUBMISSION_KEY_PATTERN.test(explicitKey))
     throw localInputError(
@@ -1470,6 +1498,9 @@ async function submitChargeableWork(context, route, kind) {
     submission_key_source: pending.source,
     credit_balance: facts === null ? null : readField(facts, "credit_balance") ?? null,
     quote: kind === "material_index" && facts !== null ? readField(facts, "material_index_quote") ?? null : null,
+    // The primary directory reports the server's own count of not yet processed videos; the CLI
+    // only forwards it so the caller can explain what this batch would process.
+    ...kind === "material_index" && input.library_type === "primary" && facts !== null && readField(facts, "unprocessed_video_count") !== void 0 ? { unprocessed_video_count: readField(facts, "unprocessed_video_count") } : {},
     input_summary: inputSummary(kind, input)
   });
   let response;
@@ -1760,7 +1791,7 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   },
   {
     id: "material.index.submit",
-    summary: "\u63D0\u4EA4\u7D20\u6750\u7D22\u5F15\uFF08\u6536\u8D39\uFF0C\u9700\u8981\u663E\u5F0F\u786E\u8BA4\uFF09",
+    summary: "\u63D0\u4EA4\u7D20\u6750\u7D22\u5F15\u6216\u4E3B\u7D20\u6750\u5E93\u300C\u5904\u7406\u5E76\u7D22\u5F15\u300D\uFF08\u6536\u8D39\uFF0C\u9700\u8981\u663E\u5F0F\u786E\u8BA4\uFF09",
     usage: "material.index.submit --project <\u9879\u76EE ID> [--submission-key <\u5E42\u7B49\u952E>] [--notice-version <\u63D0\u793A\u7248\u672C>] --confirm-charge --input '{...}'",
     options: { ...PROJECT_OPTION, ...CHARGE_OPTIONS, ...PAYLOAD_OPTIONS },
     needsCredential: !0,
@@ -1769,11 +1800,13 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
       return submitChargeableWork(context, "material.index.submit", "material_index");
     },
     help: {
-      note: "\u53EA\u6709 primary \u548C talking_head \u53EF\u4EE5\u7D22\u5F15\uFF1Bvoiceover \u6CA1\u6709\u7D22\u5F15\u5165\u53E3\u3002",
+      note: "\u53EA\u6709 primary \u548C talking_head \u53EF\u4EE5\u7D22\u5F15\uFF1Bvoiceover \u6CA1\u6709\u7D22\u5F15\u5165\u53E3\u3002\u4E3B\u7D20\u6750\u5E93\u5B58\u5728\u672A\u5904\u7406\u89C6\u9891\u65F6\u5FC5\u987B\u663E\u5F0F\u9009\u62E9 shot_mode\uFF0C\u4E00\u6B21\u786E\u8BA4\u540C\u65F6\u6388\u6743\u5206\u5272\u548C\u968F\u540E\u7684\u7D22\u5F15\uFF1B\u6CA1\u6709\u672A\u5904\u7406\u89C6\u9891\u65F6\u53EA\u4F20 library_type\uFF0C\u8FD9\u4E5F\u662F\u7D22\u5F15\u79EF\u5206\u4E0D\u8DB3\u6682\u505C\u540E\u7684\u300C\u7EE7\u7EED\u7D22\u5F15\u300D\u5165\u53E3\uFF08\u4E0D\u8981\u91CD\u4F20 shot_mode\uFF09\u3002\u4EBA\u7269\u53E3\u64AD\u5E93\u53EA\u80FD\u7D22\u5F15\uFF0C\u4E0D\u63A5\u53D7 shot_mode \u548C additional_prompt\u3002\u670D\u52A1\u7AEF\u6309\u771F\u5B9E\u65F6\u957F\u4E0E\u53EF\u7D22\u5F15\u7D20\u6750\u6838\u4EF7\uFF0CCLI \u4E0D\u8BA1\u7B97\u4EF7\u683C\u6216\u5DEE\u989D\u3002",
       fields: [
-        { key: "library_type", required: !0, type: "enum", values: MATERIAL_LIBRARY_TYPES, description: "\u8981\u7D22\u5F15\u7684\u7D20\u6750\u5E93\u3002" }
+        { key: "library_type", required: !0, type: "enum", values: MATERIAL_LIBRARY_TYPES, description: "\u8981\u7D22\u5F15\u7684\u7D20\u6750\u5E93\u3002" },
+        { key: "shot_mode", type: "enum", values: MATERIAL_SHOT_MODES, description: "\u4EC5 primary\uFF1Asingle \u4E3A\u8FDE\u7EED\u62CD\u6444\u4E0D\u5206\u6790\u4E0D\u88C1\u526A\uFF0Cmulti \u4E3A\u540C\u4E00\u6587\u4EF6\u5305\u542B\u591A\u4E2A\u955C\u5934\uFF0Cmixed \u7531\u8282\u70B9\u5148\u514D\u8D39\u5206\u7C7B\u518D\u53EA\u5206\u5272\u591A\u955C\u5934/\u957F\u955C\u5934\u3002" },
+        { key: "additional_prompt", type: "string", description: "\u4EC5\u4E0E shot_mode \u4E00\u8D77\u4F7F\u7528\uFF0C\u8BF4\u660E\u672C\u6B21\u8981\u4FDD\u7559\u6216\u53BB\u9664\u7684\u753B\u9762\uFF1B\u6CA1\u6709\u7279\u6B8A\u8981\u6C42\u8BF7\u7701\u7565\u6216\u7559\u7A7A\u3002" }
       ],
-      example: { library_type: "primary" },
+      example: { library_type: "primary", shot_mode: "mixed", additional_prompt: "\u53BB\u9664\u6240\u6709\u4EBA\u7269\u53E3\u64AD\u753B\u9762\uFF0C\u53EA\u4FDD\u7559\u4EA7\u54C1\u753B\u9762" },
       next: ["request.watch --project <\u9879\u76EE ID> --request <request_id>"]
     }
   }
@@ -2140,6 +2173,73 @@ var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   }
 ];
 
+// packages/mycutbuddy-cli/src/commands/shot-stage.ts
+var MATERIAL_SHOT_STAGES = [
+  "preparing",
+  "prepared",
+  "processing",
+  "processed",
+  "indexing",
+  "awaiting_index_credits",
+  "completed",
+  "failed",
+  "cancelled"
+], STAGE_LABELS = {
+  preparing: "\u6B63\u5728\u51C6\u5907\u5904\u7406",
+  prepared: "\u6B63\u5728\u5F00\u59CB\u5904\u7406",
+  processing: "\u6B63\u5728\u5206\u5272\u7D20\u6750",
+  processed: "\u5206\u5272\u5DF2\u5B8C\u6210\uFF0C\u6B63\u5728\u51C6\u5907\u7D22\u5F15",
+  indexing: "\u5206\u5272\u5DF2\u5B8C\u6210\uFF0C\u6B63\u5728\u7D22\u5F15",
+  awaiting_index_credits: "\u5206\u5272\u5DF2\u5B8C\u6210\uFF0C\u5F85\u7D22\u5F15\uFF08\u79EF\u5206\u4E0D\u8DB3\uFF09",
+  completed: "\u955C\u5934\u5904\u7406\u5DF2\u5B8C\u6210",
+  failed: "\u955C\u5934\u5904\u7406\u672A\u5B8C\u6210",
+  cancelled: "\u955C\u5934\u5904\u7406\u5DF2\u53D6\u6D88"
+};
+function readShotStageView(payload) {
+  let projection = readField(payload, "shot_processing"), stageValue = readField(projection, "stage") ?? readField(payload, "shot_processing_stage");
+  if (typeof stageValue != "string" || !MATERIAL_SHOT_STAGES.includes(stageValue))
+    return null;
+  let stage = stageValue;
+  return {
+    stage,
+    label: stage === "failed" && readField(projection, "failure_stage") === "index" ? "\u5206\u5272\u5DF2\u5B8C\u6210\uFF0C\u7D22\u5F15\u5931\u8D25" : STAGE_LABELS[stage],
+    summary: projection !== null && typeof projection == "object" && !Array.isArray(projection) ? projection : { stage },
+    // Only a real outcome or the durable index-credit pause ends the observation: the pause waits
+    // for the user's explicit resume, and nothing else stops advancing by itself.
+    stopsObservation: stage === "completed" || stage === "failed" || stage === "cancelled" || stage === "awaiting_index_credits",
+    nextStep: nextStepFor(stage, projection)
+  };
+}
+function pushShotStageWarning(warnings, view) {
+  if (view.stage === "awaiting_index_credits") {
+    warnings.push({ code: "index_credits_insufficient", message: view.nextStep ?? "" });
+    return;
+  }
+  if (view.stage === "failed") {
+    warnings.push({
+      code: "shot_processing_failed",
+      message: view.nextStep ?? "\u8BF7\u8BFB\u53D6\u670D\u52A1\u7AEF\u5B89\u5168\u5931\u8D25\u4E8B\u5B9E\uFF0C\u6D88\u8D39\u4E0E\u8FD4\u8FD8\u4EE5\u670D\u52A1\u7AEF\u8D26\u672C\u4E3A\u51C6\u3002"
+    });
+    return;
+  }
+  view.stage === "cancelled" && warnings.push({
+    code: "shot_processing_cancelled",
+    message: "\u670D\u52A1\u7AEF\u955C\u5934\u9636\u6BB5\u4E3A cancelled\uFF1A\u672C\u6B21\u672A\u63D0\u4EA4\u7684\u5904\u7406\u4EA7\u7269\u5DF2\u6E05\u7406\uFF0C\u5DF2\u6263\u79EF\u5206\u662F\u5426\u8FD4\u8FD8\u5728\u670D\u52A1\u7AEF\u8D26\u672C\u4E3A\u51C6\u3002"
+  });
+}
+function nextStepFor(stage, projection) {
+  if (stage === "completed")
+    return "\u672C\u6B21\u955C\u5934\u6D41\u7A0B\u5DF2\u7ED3\u675F\uFF1B\u7528 material.directory --library primary \u8BFB\u53D6\u5F53\u524D\u7D20\u6750\u4E0E\u771F\u5B9E\u7D22\u5F15\u72B6\u6001\uFF0C\u65E0\u5F85\u7D22\u5F15\u7D20\u6750\u65F6\u4E0D\u4F1A\u521B\u5EFA\u7D22\u5F15\u4EFB\u52A1\u3002";
+  if (stage === "failed")
+    return readField(projection, "failure_stage") === "index" ? "\u5206\u5272\u5DF2\u5B8C\u6210\uFF0C\u4EC5\u7D22\u5F15\u5931\u8D25\uFF1B\u6210\u529F\u5206\u5272\u548C\u5904\u7406\u8D39\u4FDD\u7559\uFF0C\u7D22\u5F15\u8FD4\u8FD8\u4EE5\u670D\u52A1\u7AEF\u8D26\u672C\u4E3A\u51C6\u3002\u786E\u8BA4\u5F53\u524D\u5E93\u6CA1\u6709\u65B0\u589E\u672A\u5904\u7406\u89C6\u9891\u540E\uFF0C\u91CD\u65B0\u6388\u6743 material.index.submit\uFF0C\u53EA\u4F20 library_type=primary \u66F4\u65B0\u7D22\u5F15\uFF0C\u4E0D\u91CD\u4F20\u955C\u5934\u6A21\u5F0F\u3002" : "\u8BFB\u53D6\u5931\u8D25\u4E8B\u5B9E\u540E\u6309\u771F\u5B9E\u539F\u56E0\u5904\u7406\uFF1B\u5DF2\u63D0\u4EA4\u7684\u5206\u5272\u4E0E\u5904\u7406\u6807\u8BB0\u4E0D\u4F1A\u56E0\u4E3A\u8FD9\u6B21\u5931\u8D25\u88AB\u56DE\u6EDA\u3002";
+  if (stage === "cancelled")
+    return "\u672C\u6B21\u8BF7\u6C42\u5DF2\u53D6\u6D88\uFF1B\u9700\u8981\u91CD\u505A\u65F6\u91CD\u65B0\u4E0E\u7528\u6237\u786E\u8BA4\u540E\u7528\u65B0\u7684\u63D0\u4EA4\u952E\u53D1\u8D77\uFF0C\u4E0D\u8981\u590D\u7528\u65E7\u63D0\u4EA4\u952E\u3002";
+  if (stage !== "awaiting_index_credits")
+    return null;
+  let required = readField(projection, "index_required_credits"), balance = readField(projection, "index_balance"), shortfall = readField(projection, "index_shortfall");
+  return `\u5206\u5272\u5DF2\u5B8C\u6210\u3001\u5F85\u7D22\u5F15\uFF1A${typeof required == "number" && typeof balance == "number" && typeof shortfall == "number" ? `\u672C\u6B21\u7D22\u5F15\u9700\u8981 ${required} \u79EF\u5206\u3001\u5F53\u524D\u4F59\u989D ${balance}\u3001\u5DEE\u989D ${shortfall}\u3002` : "\u6240\u9700\u79EF\u5206\u3001\u5F53\u524D\u4F59\u989D\u4E0E\u5DEE\u989D\u89C1 data.shot_processing\u3002"}\u8865\u8DB3\u79EF\u5206\u540E\u91CD\u65B0\u6267\u884C material.index.submit\uFF0C\u53EA\u4F20 library_type=primary \u663E\u5F0F\u7EE7\u7EED\u7D22\u5F15\uFF1B\u5DF2\u6210\u529F\u7684\u5206\u5272\u8D39\u4E0D\u9000\uFF0C\u65E7\u7247\u6BB5\u4E0D\u4F1A\u91CD\u65B0\u5206\u5272\uFF0C\u89C2\u5BDF\u547D\u4EE4\u4E0D\u4F1A\u81EA\u52A8\u91CD\u63D0\u6216\u91CD\u6263\u3002`;
+}
+
 // packages/mycutbuddy-cli/src/commands/request.ts
 var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", REQUEST_HINT = "\u8BA1\u8D39\u8BF7\u6C42 ID\uFF0C\u6765\u81EA\u4EFB\u610F\u6536\u8D39\u63D0\u4EA4\u547D\u4EE4\u8FD4\u56DE\u7684 request_id", REQUEST_TERMINAL_STATES = {
   failed: !0,
@@ -2170,9 +2270,11 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     help: {
+      note: "\u666E\u901A\u8BF7\u6C42\u5728 submitted/failed/cancelled \u505C\u6B62\u3002\u4E3B\u5E93\u955C\u5934\u8BF7\u6C42\uFF08\u8FD4\u56DE shot_processing\uFF09\u4F1A\u7EE7\u7EED\u89C2\u5BDF\u5904\u7406\u4E0E\u968F\u540E\u7684\u7D22\u5F15\u9636\u6BB5\uFF0C\u76F4\u5230 completed/failed/cancelled \u6216\u7D22\u5F15\u79EF\u5206\u4E0D\u8DB3\u7684\u6301\u4E45\u6682\u505C awaiting_index_credits\uFF1B\u6682\u505C\u65F6\u6309 shot_next_step \u63D0\u793A\u8865\u8DB3\u540E\u4EC5\u7EE7\u7EED\u7D22\u5F15\uFF0C\u89C2\u5BDF\u672C\u8EAB\u4E0D\u4F1A\u81EA\u52A8\u63D0\u4EA4\u6216\u91CD\u6263\u3002\u7A97\u53E3\u7ED3\u675F\u53EA\u62A5 watch_incomplete\u3002",
       next: [
         "material.directory --project <\u9879\u76EE ID> --library <\u5E93\u7C7B\u578B>  # \u5BFC\u5165/\u7D22\u5F15\u7EE7\u7EED\u6267\u884C\u65F6",
-        "task.watch --project <\u9879\u76EE ID> --task <execution_task_id>  # \u526A\u8F91\u6267\u884C\u4EFB\u52A1"
+        "task.watch --project <\u9879\u76EE ID> --task <execution_task_id>  # \u526A\u8F91\u6267\u884C\u4EFB\u52A1",
+        `material.index.submit --project <\u9879\u76EE ID> --confirm-charge --input '{"library_type":"primary"}'  # \u7D22\u5F15\u79EF\u5206\u4E0D\u8DB3\u8865\u8DB3\u540E\u7EE7\u7EED\u7D22\u5F15\uFF08\u4E0D\u8981\u91CD\u4F20 shot_mode\uFF09`
       ]
     },
     async run(context) {
@@ -2184,16 +2286,34 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
         fallback: 5,
         minimum: 1,
         maximum: 300
-      }), deadline = Date.now() + timeoutSeconds * 1e3, observations = 0, request = null, state;
+      }), deadline = Date.now() + timeoutSeconds * 1e3, observations = 0, request = null, state, shot = null;
       for (; ; ) {
-        request = await readRequest(context), state = readStringField(request, "state"), observations += 1;
+        request = await readRequest(context), state = readStringField(request, "state"), shot = readShotStageView(request), observations += 1;
         let executionTaskId = readStringField(request, "execution_task_id");
         if (context.progress({
           event: "request_observation",
           state: state ?? null,
           execution_task_id: executionTaskId ?? null,
+          shot_stage: shot?.stage ?? null,
+          shot_stage_label: shot?.label ?? null,
           observation: observations
-        }), state !== void 0 && REQUEST_TERMINAL_STATES[state] === !0) {
+        }), shot !== null && (shot.stopsObservation || state === "failed" || state === "cancelled"))
+          return pushShotStageWarning(context.warnings, shot), {
+            request,
+            terminal: !0,
+            execution_task_id: executionTaskId ?? null,
+            execution_continues: !1,
+            shot_processing: shot.summary,
+            shot_stage_label: shot.label,
+            shot_next_step: shot.nextStep,
+            observations,
+            watch: {
+              timeout_seconds: timeoutSeconds,
+              interval_seconds: intervalSeconds,
+              stopped_because: shot.stopsObservation ? shot.stage : state === "failed" ? "failed" : "cancelled"
+            }
+          };
+        if (shot === null && state !== void 0 && REQUEST_TERMINAL_STATES[state] === !0) {
           let executionContinues = state === "submitted" && executionTaskId !== void 0;
           return executionContinues && context.warnings.push({
             code: "execution_continues",
@@ -2217,12 +2337,19 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
       }
       return context.warnings.push({
         code: "watch_incomplete",
-        message: `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u8BF7\u6C42\u72B6\u6001\u4ECD\u662F ${state ?? "\u672A\u77E5"}\uFF1B\u8FD9\u4E0D\u8868\u793A\u8BF7\u6C42\u5DF2\u7ECF\u5B8C\u6210\u3002`
+        message: shot === null ? `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u8BF7\u6C42\u72B6\u6001\u4ECD\u662F ${state ?? "\u672A\u77E5"}\uFF1B\u8FD9\u4E0D\u8868\u793A\u8BF7\u6C42\u5DF2\u7ECF\u5B8C\u6210\u3002` : `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u955C\u5934\u9636\u6BB5\u4ECD\u662F ${shot.stage}\uFF08\u8BF7\u6C42\u72B6\u6001 ${state ?? "\u672A\u77E5"}\uFF09\uFF1B\u8FD9\u4E0D\u8868\u793A\u6574\u6761\u955C\u5934\u5904\u7406\u94FE\u5DF2\u7ECF\u5B8C\u6210\u3002`
       }), {
         request,
         terminal: !1,
         execution_task_id: readStringField(request, "execution_task_id") ?? null,
-        execution_continues: !1,
+        // Active shot stages keep working in the background; an ordinary request keeps the
+        // existing `false` because its remaining work is read from another command.
+        execution_continues: shot !== null,
+        ...shot === null ? {} : {
+          shot_processing: shot.summary,
+          shot_stage_label: shot.label,
+          shot_next_step: shot.nextStep
+        },
         observations,
         watch: {
           timeout_seconds: timeoutSeconds,
@@ -2329,6 +2456,9 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     },
     needsCredential: !0,
     chargeable: !1,
+    help: {
+      note: "\u4EFB\u52A1\u53EA\u9648\u8FF0\u5355\u4E2A\u6267\u884C\u9636\u6BB5\uFF1A\u4EFB\u52A1 completed \u4E0D\u7B49\u4E8E\u6574\u6761\u4E3B\u5E93\u955C\u5934\u5904\u7406\u94FE\u5B8C\u6210\u3002\u540C\u4E00\u94FE\u7684\u9636\u6BB5\u7528 shot_processing \u4E0E shot_next_step \u8BFB\u53D6\uFF0C\u6574\u94FE\u89C2\u5BDF\u7528 request.watch\uFF1B\u7D20\u6750\u5BFC\u5165\u4E0E\u72EC\u7ACB\u7D22\u5F15\u7684\u6267\u884C\u4EFB\u52A1\u540C\u6837\u6309\u81EA\u8EAB status \u5224\u65AD\u7EC8\u6001\uFF08\u8FD4\u56DE task_type\u3001request_id\u3001import_stage\uFF09\uFF0C\u5E93\u7EA7\u4E8B\u5B9E\u4ECD\u8BFB material.directory\uFF1B\u7A97\u53E3\u7ED3\u675F\u53EA\u62A5 watch_incomplete\u3002"
+    },
     async run(context) {
       let timeoutSeconds = optionInteger(context.values, "watch-timeout", {
         fallback: 60,
@@ -2338,19 +2468,30 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
         fallback: 5,
         minimum: 1,
         maximum: 300
-      }), deadline = Date.now() + timeoutSeconds * 1e3, observations = 0, task = null, status;
+      }), deadline = Date.now() + timeoutSeconds * 1e3, observations = 0, task = null, status, shot = null;
       for (; ; ) {
-        if (task = (await readTask(context)).body, status = readStringField(task, "status"), observations += 1, context.progress({
+        if (task = (await readTask(context)).body, status = readStringField(task, "status"), shot = readShotStageView(task), observations += 1, context.progress({
           event: "task_observation",
           status: status ?? null,
+          shot_stage: shot?.stage ?? null,
+          shot_stage_label: shot?.label ?? null,
           observation: observations,
           terminal: isTerminalTaskStatus(status)
         }), isTerminalTaskStatus(status))
-          return {
+          return shot !== null && pushShotStageWarning(context.warnings, shot), {
             task,
             terminal: !0,
+            ...shot === null ? {} : {
+              shot_processing: shot.summary,
+              shot_stage_label: shot.label,
+              shot_next_step: shot.nextStep
+            },
             observations,
-            watch: { timeout_seconds: timeoutSeconds, interval_seconds: intervalSeconds, stopped_because: "terminal_state" }
+            watch: {
+              timeout_seconds: timeoutSeconds,
+              interval_seconds: intervalSeconds,
+              stopped_because: "terminal_state"
+            }
           };
         if (Date.now() + intervalSeconds * 1e3 > deadline)
           break;
@@ -2358,10 +2499,15 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
       }
       return context.warnings.push({
         code: "watch_incomplete",
-        message: `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u72B6\u6001\u4ECD\u662F ${status ?? "\u672A\u77E5"}\uFF1B\u8FD9\u4E0D\u8868\u793A\u4EFB\u52A1\u5DF2\u7ECF\u5B8C\u6210\u3002`
+        message: shot === null ? `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u72B6\u6001\u4ECD\u662F ${status ?? "\u672A\u77E5"}\uFF1B\u8FD9\u4E0D\u8868\u793A\u4EFB\u52A1\u5DF2\u7ECF\u5B8C\u6210\u3002` : `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u4EFB\u52A1\u72B6\u6001\u4ECD\u662F ${status ?? "\u672A\u77E5"}\uFF0C\u955C\u5934\u9636\u6BB5\u4E3A ${shot.stage}\uFF1B\u8FD9\u4E0D\u8868\u793A\u6574\u6761\u955C\u5934\u5904\u7406\u94FE\u5DF2\u7ECF\u5B8C\u6210\u3002`
       }), {
         task,
         terminal: !1,
+        ...shot === null ? {} : {
+          shot_processing: shot.summary,
+          shot_stage_label: shot.label,
+          shot_next_step: shot.nextStep
+        },
         observations,
         watch: { timeout_seconds: timeoutSeconds, interval_seconds: intervalSeconds, stopped_because: "observation_window_exhausted" }
       };
