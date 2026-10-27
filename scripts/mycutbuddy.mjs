@@ -46,7 +46,7 @@ var MATERIAL_LIBRARY_TYPES = ["primary", "talking_head", "voiceover"], EDITING_F
   "refund",
   "bonus",
   "adjustment"
-], NARRATION_AUDIO_SOURCES = ["tts", "upload"], MATERIAL_SHOT_MODES = ["single", "multi", "mixed"], TASK_PAGE_SIZES = [20, 30, 50], DEFAULT_TASK_PAGE_SIZE = 20, MAX_BATCH_ROWS = 200;
+], NARRATION_AUDIO_SOURCES = ["tts", "upload"], MATERIAL_SHOT_MODES = ["single", "multi", "mixed"], MATERIAL_IMPORT_DIRECTORY_CONTRACT_VERSION = "material-import-directory.v1", TASK_PAGE_SIZES = [20, 30, 50], DEFAULT_TASK_PAGE_SIZE = 20, MAX_BATCH_ROWS = 200;
 function isMaterialLibraryType(value) {
   return typeof value == "string" && MATERIAL_LIBRARY_TYPES.includes(value);
 }
@@ -84,6 +84,14 @@ function optionString(values, name) {
       throw localInputError("invalid_arguments", `\u53C2\u6570 --${name} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
     return value;
   }
+}
+function optionStrings(values, name) {
+  let value = values[name];
+  return value === void 0 ? [] : (Array.isArray(value) ? value : [value]).map((entry) => {
+    if (typeof entry != "string" || entry.trim().length === 0)
+      throw localInputError("invalid_arguments", `\u53C2\u6570 --${name} \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u3002`);
+    return entry.trim();
+  });
 }
 function requiredStringOption(values, name, hint) {
   let value = optionString(values, name);
@@ -321,7 +329,7 @@ function redactSecrets(value) {
 }
 
 // packages/mycutbuddy-cli/src/core/routes.ts
-var SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/, PROJECT = "/api/projects/{projectId}", REQUEST = `${PROJECT}/billing-submissions/{requestId}`, SINGLE_TRACK = `${PROJECT}/single-track`, STYLE_IMPORT = `${PROJECT}/subtitle-style-imports/{importId}`, CLI_ROUTES = {
+var SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/, PROJECT = "/api/projects/{projectId}", REQUEST = `${PROJECT}/billing-submissions/{requestId}`, SINGLE_TRACK = `${PROJECT}/single-track`, STYLE_IMPORT = `${PROJECT}/subtitle-style-imports/{importId}`, UPLOAD = "/api/materials/{projectId}/uploads", UPLOAD_SESSION = `${UPLOAD}/{uploadId}`, CLI_ROUTES = {
   "project.list": { method: "GET", path: "/api/projects" },
   "project.create": { method: "POST", path: "/api/projects" },
   "project.get": { method: "GET", path: PROJECT },
@@ -330,6 +338,14 @@ var SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/, PROJECT = "/api/projects/{projec
   "material.directory": { method: "GET", path: "/api/materials/{projectId}/management" },
   "material.manage": { method: "POST", path: "/api/materials/{projectId}/management" },
   "material.import-failure.dismiss": { method: "POST", path: "/api/materials/{projectId}/import-failure/dismiss" },
+  // Direct upload client surface. `page_id` is the client session token of one run, not a browser
+  // page; the node status report and the tus authorization callback are never CLI routes.
+  "material.upload.preview": { method: "POST", path: `${UPLOAD}/preview` },
+  "material.upload.admit": { method: "POST", path: UPLOAD },
+  "material.upload.get": { method: "GET", path: UPLOAD_SESSION },
+  "material.upload.heartbeat": { method: "POST", path: `${UPLOAD_SESSION}/heartbeat` },
+  "material.upload.complete": { method: "POST", path: `${UPLOAD_SESSION}/complete` },
+  "material.upload.terminate": { method: "POST", path: `${UPLOAD_SESSION}/terminate` },
   "preset.style.list": { method: "GET", path: `${SINGLE_TRACK}/presets` },
   "preset.style.create": { method: "POST", path: `${SINGLE_TRACK}/presets` },
   "preset.style.get": { method: "GET", path: `${SINGLE_TRACK}/presets/{presetId}` },
@@ -543,7 +559,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.3.9";
+var CLI_VERSION = "0.4.0";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
@@ -618,8 +634,8 @@ async function requestDeviceAuthorization(options) {
   );
 }
 function delaySeconds(seconds) {
-  let { promise, resolve: resolve3 } = Promise.withResolvers();
-  return setTimeout(resolve3, seconds * 1e3), promise;
+  let { promise, resolve: resolve4 } = Promise.withResolvers();
+  return setTimeout(resolve4, seconds * 1e3), promise;
 }
 async function pollDeviceAuthorization(session, options) {
   let deadline = Date.now() + (options.waitBudgetMs ?? 0), intervalSeconds = session.intervalSeconds;
@@ -1103,25 +1119,82 @@ async function extractDraftPackage(options) {
   let target = resolve2(options.targetDirectory), result = await extractArchive({ archivePath: resolved, targetDirectory: target });
   return { package_path: resolved, target_directory: target, ...result };
 }
+function summarizeEntries(entries, prefix) {
+  let related = prefix === null ? entries : entries.filter((entry) => entry.name.startsWith(prefix));
+  return {
+    files: related.filter((entry) => !entry.directory).length,
+    directories: related.filter((entry) => entry.directory).length,
+    bytes: related.reduce((total, entry) => total + entry.bytes, 0)
+  };
+}
 async function installDraftPackage(options) {
-  let packagePath = assertPackageFile(options.packagePath), draftsDirectory = assertDraftsDirectory(options.draftsDirectory);
-  inspectArchive(packagePath);
-  let stagingDirectory = join2(draftsDirectory, `.mycutbuddy-install-${randomBytes(6).toString("hex")}`);
+  let packagePath = assertPackageFile(options.packagePath), draftsDirectory = assertDraftsDirectory(options.draftsDirectory), requestedName = options.draftName === void 0 ? void 0 : assertDraftName(options.draftName), inspection = inspectArchive(packagePath), stagingDirectory = join2(draftsDirectory, `.mycutbuddy-install-${randomBytes(6).toString("hex")}`);
   try {
-    let extracted = await extractArchive({ archivePath: packagePath, targetDirectory: stagingDirectory }), inner = readdirSync(stagingDirectory), singleDirectory = inner.length === 1 && lstatSync2(join2(stagingDirectory, inner[0])).isDirectory() ? inner[0] : null, draftName = assertDraftName(
-      options.draftName ?? singleDirectory ?? basename(packagePath).replace(/\.zip$/i, "")
-    ), sourceDirectory = singleDirectory === null ? stagingDirectory : join2(stagingDirectory, singleDirectory), installedPath = join2(draftsDirectory, draftName);
-    if (lstatSync2(installedPath, { throwIfNoEntry: !1 }) !== void 0)
+    let extracted = await extractArchive({ archivePath: packagePath, targetDirectory: stagingDirectory }), staged = readdirSync(stagingDirectory, { withFileTypes: !0 }), draftDirectories = staged.filter((entry) => entry.isDirectory()).map((entry) => entry.name), looseEntries = staged.some((entry) => !entry.isDirectory()), plan = [];
+    if (looseEntries) {
+      if (draftDirectories.length > 1)
+        throw localInputError(
+          "invalid_package_layout",
+          `\u538B\u7F29\u5305\u6839\u90E8\u65E2\u6709\u8349\u7A3F\u76EE\u5F55\u53C8\u6709\u6563\u843D\u6587\u4EF6\uFF0C\u65E0\u6CD5\u5224\u65AD\u8349\u7A3F\u8FB9\u754C\uFF1A${draftDirectories.join("\u3001")}\u3002\u8BF7\u91CD\u65B0\u751F\u6210\u4EA4\u4ED8\u5305\u3002`,
+          { draft_directories: draftDirectories }
+        );
+      plan.push({
+        draftName: requestedName ?? basename(packagePath).replace(/\.zip$/i, ""),
+        sourceDirectory: stagingDirectory,
+        prefix: null
+      });
+    } else {
+      if (draftDirectories.length === 0)
+        throw localInputError("invalid_package_layout", "\u538B\u7F29\u5305\u5185\u6CA1\u6709\u4EFB\u4F55\u8349\u7A3F\u76EE\u5F55\uFF0C\u65E0\u6CD5\u5B89\u88C5\u3002", {
+          package_path: packagePath
+        });
+      if (draftDirectories.length === 1)
+        plan.push({
+          draftName: requestedName ?? assertDraftName(draftDirectories[0]),
+          sourceDirectory: join2(stagingDirectory, draftDirectories[0]),
+          prefix: `${draftDirectories[0]}/`
+        });
+      else {
+        if (requestedName !== void 0)
+          throw localInputError(
+            "name_requires_single_draft",
+            `\u538B\u7F29\u5305\u5185\u542B ${draftDirectories.length} \u6761\u8349\u7A3F\uFF0C--name \u53EA\u80FD\u7528\u4E8E\u5355\u8349\u7A3F\u5305\uFF1B\u8BF7\u76F4\u63A5\u5B89\u88C5\uFF0C\u8349\u7A3F\u4F1A\u5404\u81EA\u6CBF\u7528\u5305\u5185\u76EE\u5F55\u540D\u3002`,
+            { draft_directories: draftDirectories }
+          );
+        for (let directory of draftDirectories)
+          plan.push({
+            draftName: assertDraftName(directory),
+            sourceDirectory: join2(stagingDirectory, directory),
+            prefix: `${directory}/`
+          });
+      }
+    }
+    let targets = plan.map((item) => ({ ...item, installedPath: join2(draftsDirectory, item.draftName) })), conflicts = targets.filter((target) => lstatSync2(target.installedPath, { throwIfNoEntry: !1 }) !== void 0);
+    if (conflicts.length > 0) {
+      let paths = conflicts.map((target) => target.installedPath);
       throw localInputError(
         "draft_conflict",
-        `\u540C\u540D\u8349\u7A3F\u5DF2\u5B58\u5728\uFF0CCLI \u4E0D\u4F1A\u8986\u76D6\uFF1A${installedPath}\u3002\u8BF7\u5148\u5904\u7406\u5DF2\u6709\u8349\u7A3F\uFF0C\u6216\u7528 --name \u6307\u5B9A\u53E6\u4E00\u4E2A\u76EE\u5F55\u540D\u3002`,
-        { installed_path: installedPath, draft_name: draftName }
+        conflicts.length === 1 ? `\u540C\u540D\u8349\u7A3F\u5DF2\u5B58\u5728\uFF0CCLI \u4E0D\u4F1A\u8986\u76D6\uFF1A${paths[0]}\u3002\u8BF7\u5148\u5904\u7406\u5DF2\u6709\u8349\u7A3F\uFF0C\u6216\u7528 --name \u6307\u5B9A\u53E6\u4E00\u4E2A\u76EE\u5F55\u540D\u3002` : `\u6709 ${conflicts.length} \u4E2A\u540C\u540D\u8349\u7A3F\u5DF2\u5B58\u5728\uFF0CCLI \u4E0D\u4F1A\u8986\u76D6\u5176\u4E2D\u4EFB\u4F55\u4E00\u4E2A\uFF1A${paths.join("\u3001")}\u3002\u8BF7\u5148\u5904\u7406\u5DF2\u6709\u8349\u7A3F\u3002`,
+        { installed_paths: paths, draft_names: conflicts.map((target) => target.draftName) }
       );
-    return renameSync2(sourceDirectory, installedPath), sourceDirectory !== stagingDirectory && rmSync3(stagingDirectory, { recursive: !0, force: !0 }), {
+    }
+    let installed = [];
+    try {
+      for (let target of targets)
+        renameSync2(target.sourceDirectory, target.installedPath), installed.push({
+          draft_name: target.draftName,
+          installed_path: target.installedPath,
+          ...summarizeEntries(inspection.entries, target.prefix)
+        });
+    } catch (error) {
+      for (let draft of installed)
+        rmSync3(draft.installed_path, { recursive: !0, force: !0 });
+      throw error;
+    }
+    return {
       package_path: packagePath,
       drafts_directory: draftsDirectory,
-      draft_name: draftName,
-      installed_path: installedPath,
+      drafts: installed,
       files: extracted.files,
       directories: extracted.directories,
       bytes: extracted.bytes,
@@ -1135,8 +1208,8 @@ async function installDraftPackage(options) {
         jianying_recognition: "unverified"
       }
     };
-  } catch (error) {
-    throw rmSync3(stagingDirectory, { recursive: !0, force: !0 }), error;
+  } finally {
+    rmSync3(stagingDirectory, { recursive: !0, force: !0 });
   }
 }
 
@@ -1236,7 +1309,7 @@ var PROJECT_HINT = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\
   },
   {
     id: "delivery.install",
-    summary: "\u628A\u672C\u5730\u4EA4\u4ED8\u538B\u7F29\u5305\u5B89\u88C5\u4E3A\u526A\u6620\u8349\u7A3F\u76EE\u5F55\uFF08\u540C\u540D\u4E0D\u8986\u76D6\uFF0C\u4E0D\u6539\u5199\u8349\u7A3F JSON\uFF09",
+    summary: "\u628A\u672C\u5730\u4EA4\u4ED8\u538B\u7F29\u5305\u5185\u7684\u5168\u90E8\u8349\u7A3F\u5B89\u88C5\u4E3A\u526A\u6620\u8349\u7A3F\u76EE\u5F55\uFF08\u540C\u540D\u4E0D\u8986\u76D6\uFF0C\u4E0D\u6539\u5199\u8349\u7A3F JSON\uFF09",
     usage: "delivery.install --package <\u538B\u7F29\u5305\u8DEF\u5F84> --drafts-dir <\u526A\u6620\u8349\u7A3F\u76EE\u5F55> [--name <\u8349\u7A3F\u76EE\u5F55\u540D>]",
     options: {
       package: { type: "string" },
@@ -1462,7 +1535,9 @@ async function submitChargeableWork(context, route, kind) {
   let input = readPayload(context.values, {
     required: !0,
     hint: "\u670D\u52A1\u7AEF\u63A5\u53D7\u7684 input \u5BF9\u8C61\uFF08\u4E0E\u7F51\u9875\u5DE5\u4F5C\u53F0\u76F8\u540C\u7684\u5B57\u6BB5\uFF09"
-  }), projectId = requiredStringOption(context.values, "project", "\u9879\u76EE ID");
+  });
+  kind === "material_import" && (input.directory_contract_version = MATERIAL_IMPORT_DIRECTORY_CONTRACT_VERSION, (typeof input.target_directory != "string" || input.target_directory.trim() === "") && (input.target_directory = "."));
+  let projectId = requiredStringOption(context.values, "project", "\u9879\u76EE ID");
   kind === "editing" && validateEditingInput(input), kind === "material_index" && validateMaterialIndexInput(input);
   let explicitKey = optionString(context.values, "submission-key");
   if (explicitKey !== void 0 && !SUBMISSION_KEY_PATTERN.test(explicitKey))
@@ -1700,8 +1775,556 @@ function commandHelpText(definition) {
 `;
 }
 
+// packages/mycutbuddy-cli/src/commands/material-upload.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+
+// packages/mycutbuddy-cli/src/core/local-manifest.ts
+import { lstatSync as lstatSync3, readdirSync as readdirSync2 } from "node:fs";
+import { basename as basename2, resolve as resolve3 } from "node:path";
+function unsupported(path, kind) {
+  throw localInputError(
+    "unsupported_local_entry",
+    `\u672C\u673A\u8DEF\u5F84\u91CC\u6709\u4E0D\u652F\u6301\u5BFC\u5165\u7684\u6761\u76EE\uFF08${kind}\uFF09\uFF1A${path}\u3002\u8BF7\u53EA\u4E0A\u4F20\u666E\u901A\u6587\u4EF6\u4E0E\u76EE\u5F55\uFF0C\u7B26\u53F7\u94FE\u63A5\u8BF7\u5148\u66FF\u6362\u4E3A\u771F\u5B9E\u6587\u4EF6\u3002`,
+    { path }
+  );
+}
+function walk(directory, prefix, files) {
+  let entries = readdirSync2(directory, { withFileTypes: !0 }).slice().sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+  for (let entry of entries) {
+    let absolute = resolve3(directory, entry.name), relative = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`, stats = lstatSync3(absolute);
+    if (stats.isSymbolicLink() && unsupported(absolute, "\u7B26\u53F7\u94FE\u63A5"), stats.isDirectory()) {
+      walk(absolute, relative, files);
+      continue;
+    }
+    stats.isFile() || unsupported(absolute, "\u975E\u666E\u901A\u6587\u4EF6"), files.push({ relative_path: relative, size_bytes: stats.size, absolute_path: absolute });
+  }
+}
+function collectLocalManifest(paths, cwd) {
+  if (paths.length === 0)
+    throw localInputError("missing_argument", "\u81F3\u5C11\u9700\u8981\u4E00\u4E2A --path\uFF1A\u7ED9\u51FA\u8981\u4E0A\u4F20\u7684\u672C\u5730\u6587\u4EF6\u6216\u76EE\u5F55\u3002");
+  let files = [], rootEntries = [];
+  for (let requested of paths) {
+    let absolute = resolve3(cwd, requested), stats;
+    try {
+      stats = lstatSync3(absolute);
+    } catch {
+      throw localInputError("path_not_found", `\u672C\u673A\u8DEF\u5F84\u4E0D\u5B58\u5728\u6216\u65E0\u6CD5\u8BFB\u53D6\uFF1A${requested}`, { path: requested });
+    }
+    if (stats.isSymbolicLink() && unsupported(absolute, "\u7B26\u53F7\u94FE\u63A5"), stats.isDirectory()) {
+      rootEntries.push({ name: basename2(absolute), kind: "directory" });
+      let collected = [];
+      walk(absolute, basename2(absolute), collected), files.push(...collected);
+      continue;
+    }
+    stats.isFile() || unsupported(absolute, "\u975E\u666E\u901A\u6587\u4EF6"), rootEntries.push({ name: basename2(absolute), kind: "file" }), files.push({ relative_path: basename2(absolute), size_bytes: stats.size, absolute_path: absolute });
+  }
+  let seen = /* @__PURE__ */ new Map();
+  for (let file of files) {
+    let key = file.relative_path, count = (seen.get(key) ?? 0) + 1;
+    if (seen.set(key, count), count > 1)
+      throw localInputError(
+        "duplicate_relative_path",
+        `\u540C\u4E00\u4E2A\u8DEF\u5F84\u4E0B\u51FA\u73B0\u4E86\u91CD\u590D\u7684\u76F8\u5BF9\u8DEF\u5F84\uFF1A${key}\u3002\u8BF7\u5206\u5F00\u4E0A\u4F20\u6216\u53BB\u6389\u91CD\u590D\u7684 --path\u3002`,
+        { relative_path: key }
+      );
+  }
+  return { files, selection: { root_entries: rootEntries } };
+}
+
+// packages/mycutbuddy-cli/src/core/tus-upload.ts
+import { openSync as openSync2, closeSync as closeSync2, readSync as readSync2, statSync as statSync4 } from "node:fs";
+var TUS_CHUNK_BYTES = 8 * 1024 * 1024, TUS_RETRY_DELAYS_MS = [0, 2e3, 5e3, 1e4, 2e4, 3e4], TUS_VERSION = "1.0.0";
+function headerOffset(response) {
+  let raw = response.headers.get("upload-offset");
+  if (raw === null)
+    return null;
+  let value = Number.parseInt(raw, 10);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+function declaredLength(localPath, expectedBytes) {
+  let size = statSync4(localPath).size;
+  if (expectedBytes !== void 0 && size !== expectedBytes)
+    throw businessRejection(
+      "local_file_changed",
+      `\u672C\u5730\u6587\u4EF6\u5728\u4E0A\u4F20\u8FC7\u7A0B\u4E2D\u53D1\u751F\u53D8\u5316\uFF08\u590D\u6838 ${expectedBytes} \u5B57\u8282\uFF0C\u5F53\u524D ${size} \u5B57\u8282\uFF09\uFF1A${localPath}`,
+      { local_path: localPath }
+    );
+  return size;
+}
+function sleep(ms, signal) {
+  if (ms <= 0)
+    return Promise.resolve();
+  if (signal?.aborted === !0)
+    return Promise.reject(signal.reason ?? new Error("aborted"));
+  let { promise, resolve: resolve4, reject } = Promise.withResolvers(), onAbort = () => {
+    clearTimeout(timer), reject(signal?.reason ?? new Error("aborted"));
+  }, timer = setTimeout(() => {
+    signal?.removeEventListener("abort", onAbort), resolve4();
+  }, ms);
+  return signal?.addEventListener("abort", onAbort, { once: !0 }), promise;
+}
+function isRetryable(status) {
+  return status === 409 || status === 423 || status === 429 || status >= 500;
+}
+function retryableStatus(status, action) {
+  return transientError(
+    "upload_temporarily_unavailable",
+    `\u8282\u70B9\u6682\u65F6\u65E0\u6CD5${action}\uFF08HTTP ${status}\uFF09\uFF1A\u8FD9\u6B21\u4E0A\u4F20\u6CA1\u6709\u5B8C\u6210\uFF0C\u91CD\u65B0\u8FD0\u884C\u4F1A\u521B\u5EFA\u65B0\u7684\u4E0A\u4F20\u4F1A\u8BDD\u3002`,
+    { status, action }
+  );
+}
+function refusal(status, action) {
+  return status === 401 ? authenticationError(
+    "upload_token_refused",
+    "\u4E0A\u4F20\u4F1A\u8BDD\u4EE4\u724C\u5DF2\u5931\u6548\uFF08HTTP 401\uFF09\uFF1A\u672C\u6B21\u4E0A\u4F20\u7684\u4F1A\u8BDD\u5DF2\u88AB\u670D\u52A1\u7AEF\u62D2\u7EDD\uFF0C\u8BF7\u91CD\u65B0\u8FD0\u884C\u3002",
+    { status, action }
+  ) : businessRejection(
+    "upload_rejected",
+    `\u8282\u70B9\u62D2\u7EDD\u4E86\u4E0A\u4F20\u8BF7\u6C42\uFF08HTTP ${status}\uFF09\uFF1A${action}`,
+    { status, action }
+  );
+}
+async function request(fetchImpl, url, init) {
+  try {
+    return await fetchImpl(url, { ...init, redirect: "manual" });
+  } catch (error) {
+    throw init.signal?.aborted === !0 ? init.signal.reason ?? error : error instanceof Error && error.name === "AbortError" ? error : transientError("upload_network_error", `\u4E0A\u4F20\u8FDE\u63A5\u4E2D\u65AD\uFF1A${error instanceof Error ? error.message : String(error)}`, {
+      reason: error instanceof Error ? error.name : "Error"
+    });
+  }
+}
+async function tusUploadFile(options) {
+  let chunkBytes = options.chunkBytes ?? TUS_CHUNK_BYTES, delays = options.retryDelaysMs ?? TUS_RETRY_DELAYS_MS, totalBytes = declaredLength(options.localPath), attempt = 0, backOff = async () => {
+    options.signal?.throwIfAborted(), await sleep(delays[attempt + 1] ?? 0, options.signal), attempt += 1;
+  }, attemptLoop = async (step) => {
+    for (; ; )
+      try {
+        return await step();
+      } catch (error) {
+        if (!isCliError(error) || !error.retryable || attempt >= delays.length - 1)
+          throw error;
+        await backOff();
+      }
+  }, send = (url, init) => request(options.fetchImpl, url, {
+    ...init,
+    headers: { ...init.headers, authorization: `Bearer ${options.token()}` }
+  }), created = await attemptLoop(async () => {
+    let response = await send(options.endpoint, {
+      method: "POST",
+      headers: {
+        "tus-resumable": TUS_VERSION,
+        "upload-length": String(totalBytes),
+        "upload-metadata": `upload_id ${Buffer.from(options.uploadId, "utf8").toString("base64")},relative_path ${Buffer.from(options.relativePath, "utf8").toString("base64")}`
+      },
+      signal: options.signal
+    });
+    if (response.status === 201) {
+      let location = response.headers.get("location");
+      if (location === null)
+        throw businessRejection("upload_protocol_error", "\u8282\u70B9\u521B\u5EFA\u4E0A\u4F20\u8D44\u6E90\u540E\u6CA1\u6709\u8FD4\u56DE\u4F4D\u7F6E\uFF0C\u65E0\u6CD5\u7EE7\u7EED\u4E0A\u4F20\u3002");
+      return new URL(location, options.endpoint).toString();
+    }
+    let status = response.status;
+    throw isRetryable(status) ? retryableStatus(status, "\u521B\u5EFA\u4E0A\u4F20\u8D44\u6E90") : refusal(status, "\u521B\u5EFA\u4E0A\u4F20\u8D44\u6E90");
+  }), readOffset = async () => {
+    let response = await send(created, {
+      method: "HEAD",
+      headers: { "tus-resumable": TUS_VERSION },
+      signal: options.signal
+    });
+    if (response.status === 200) {
+      let offset2 = headerOffset(response);
+      return offset2 === null && reject_protocol("\u67E5\u8BE2\u4E0A\u4F20\u504F\u79FB\u6CA1\u6709\u8FD4\u56DE Upload-Offset\u3002"), offset2;
+    }
+    let status = response.status;
+    throw isRetryable(status) ? retryableStatus(status, "\u67E5\u8BE2\u4E0A\u4F20\u504F\u79FB") : refusal(status, "\u67E5\u8BE2\u4E0A\u4F20\u504F\u79FB");
+  }, offset = await attemptLoop(readOffset), reported = -1, report = (received) => {
+    received !== reported && (reported = received, options.onProgress?.(received));
+  };
+  report(offset);
+  let descriptor = openSync2(options.localPath, "r");
+  try {
+    for (; offset < totalBytes; ) {
+      let length = Math.min(chunkBytes, totalBytes - offset), buffer = Buffer.allocUnsafe(length);
+      if (readSync2(descriptor, buffer, 0, length, offset) !== length)
+        throw businessRejection("local_file_changed", `\u672C\u5730\u6587\u4EF6\u957F\u5EA6\u4E0E\u590D\u6838\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF1A${options.localPath}`);
+      let chunkOffset = offset, confirmed;
+      try {
+        let response = await send(created, {
+          method: "PATCH",
+          headers: {
+            "tus-resumable": TUS_VERSION,
+            "content-type": "application/offset+octet-stream",
+            "upload-offset": String(chunkOffset)
+          },
+          body: buffer,
+          signal: options.signal
+        });
+        if (response.status !== 204) {
+          let status = response.status;
+          throw isRetryable(status) ? retryableStatus(status, "\u5199\u5165\u4E0A\u4F20\u5206\u7247") : refusal(status, "\u5199\u5165\u4E0A\u4F20\u5206\u7247");
+        }
+        let reported2 = headerOffset(response);
+        reported2 === null && reject_protocol("\u5206\u7247\u4E0A\u4F20\u6CA1\u6709\u8FD4\u56DE Upload-Offset\u3002"), confirmed = reported2;
+      } catch (error) {
+        if (!isCliError(error) || !error.retryable || attempt >= delays.length - 1)
+          throw error;
+        await backOff(), offset = await attemptLoop(readOffset), report(offset);
+        continue;
+      }
+      offset = Math.min(Math.max(confirmed, chunkOffset), totalBytes), report(offset);
+    }
+  } finally {
+    closeSync2(descriptor);
+  }
+  if (offset < totalBytes)
+    throw transientError("upload_incomplete", `\u4E0A\u4F20\u672A\u5B8C\u6210\uFF1A\u5DF2\u786E\u8BA4 ${offset}/${totalBytes} \u5B57\u8282\uFF0C\u8BF7\u91CD\u65B0\u8FD0\u884C\u3002`);
+  return { resourceUrl: created, receivedBytes: offset };
+}
+function reject_protocol(message) {
+  throw businessRejection("upload_protocol_error", message);
+}
+
+// packages/mycutbuddy-cli/src/commands/material-upload.ts
+var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", LIBRARY_HINT = "\u7D20\u6750\u5E93\u7C7B\u578B\uFF1Aprimary\u3001talking_head \u6216 voiceover\uFF08\u5FC5\u987B\u663E\u5F0F\u6307\u5B9A\uFF09", SUBMISSION_KEY_PATTERN2 = /^[A-Za-z0-9_-]{1,128}$/, PAGE_HEARTBEAT_INTERVAL_MS = 15e3, MAX_CONCURRENT_FILES = 2, COMPLETE_ATTEMPTS = 6, SESSION_POLL_INTERVAL_MS = 3e3, SESSION_POLL_MAX_INTERVAL_MS = 12e3, TERMINAL_SESSION_STATES = ["completed", "failed", "cancelled"];
+function asRecord2(value) {
+  return value !== null && typeof value == "object" && !Array.isArray(value) ? value : null;
+}
+function reviewedFiles(value, source) {
+  if (!Array.isArray(value))
+    throw businessRejection("unexpected_response", `\u670D\u52A1\u7AEF\u590D\u6838\u7ED3\u679C\u7F3A\u5C11${source}\u6E05\u5355\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u4E0A\u4F20\u3002`);
+  return value.map((entry) => {
+    let record = asRecord2(entry), relativePath = readStringField(record, "relative_path"), originalPath = readStringField(record, "original_relative_path"), sizeBytes = readField(record, "size_bytes");
+    if (relativePath === void 0 || originalPath === void 0 || typeof sizeBytes != "number")
+      throw businessRejection("unexpected_response", `\u670D\u52A1\u7AEF\u590D\u6838\u7ED3\u679C\u7684${source}\u6761\u76EE\u683C\u5F0F\u65E0\u6CD5\u8BC6\u522B\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u4E0A\u4F20\u3002`);
+    let reason = readStringField(record, "reason");
+    return { relative_path: relativePath, original_relative_path: originalPath, size_bytes: sizeBytes, ...reason === void 0 ? {} : { reason } };
+  });
+}
+function startLease(context, projectId, uploadId, pageId, lease, abort) {
+  let renew = async () => {
+    try {
+      let response = await context.client.request({
+        route: "material.upload.heartbeat",
+        params: { projectId, uploadId },
+        body: { page_id: pageId }
+      }), rotated = readStringField(response.body, "token");
+      rotated !== void 0 && (lease.token = rotated);
+    } catch (error) {
+      if (isCliError(error) && error.kind === "transient")
+        return;
+      lease.failure = error, abort.abort(error);
+    }
+  };
+  lease.timer = setInterval(() => {
+    renew();
+  }, PAGE_HEARTBEAT_INTERVAL_MS), lease.timer.unref?.();
+}
+function sleep2(ms, signal) {
+  if (signal?.aborted === !0)
+    return Promise.resolve();
+  let { promise, resolve: resolve4 } = Promise.withResolvers(), timer, finish = () => {
+    clearTimeout(timer), signal?.removeEventListener("abort", finish), resolve4();
+  };
+  return timer = setTimeout(finish, ms), signal?.addEventListener("abort", finish, { once: !0 }), promise;
+}
+async function requestSeal(context, projectId, uploadId, pageId, signal) {
+  for (let attempt = 0; attempt < COMPLETE_ATTEMPTS; attempt += 1) {
+    signal.throwIfAborted();
+    try {
+      await context.client.request({
+        route: "material.upload.complete",
+        params: { projectId, uploadId },
+        body: { page_id: pageId }
+      });
+      return;
+    } catch (error) {
+      if (!(isCliError(error) && error.kind === "transient" && attempt < COMPLETE_ATTEMPTS - 1))
+        throw error;
+      context.progress({ event: "seal_retrying", upload_id: uploadId, attempt: attempt + 1 }), await sleep2(TUS_RETRY_DELAYS_MS[Math.min(attempt + 1, TUS_RETRY_DELAYS_MS.length - 1)], signal);
+    }
+  }
+}
+async function awaitTerminalSession(context, projectId, uploadId, abort) {
+  let interval = SESSION_POLL_INTERVAL_MS, reportedState = null;
+  for (; ; ) {
+    abort.signal.throwIfAborted();
+    let summary = null, state;
+    try {
+      let response = await context.client.request({
+        route: "material.upload.get",
+        params: { projectId, uploadId }
+      });
+      summary = asRecord2(response.body) ?? {}, state = readStringField(summary, "state");
+    } catch (error) {
+      if (!(isCliError(error) && error.kind === "transient"))
+        throw error;
+    }
+    if (summary !== null) {
+      if (state !== void 0 && TERMINAL_SESSION_STATES.includes(state))
+        return summary;
+      state !== reportedState && (reportedState = state ?? null, context.progress({ event: "session_waiting", upload_id: uploadId, state: state ?? null })), interval = SESSION_POLL_INTERVAL_MS;
+    } else
+      context.progress({ event: "session_poll_retrying", upload_id: uploadId, retry_in_ms: interval }), interval = Math.min(interval * 2, SESSION_POLL_MAX_INTERVAL_MS);
+    await sleep2(interval, abort.signal);
+  }
+}
+async function terminateSession(context, projectId, uploadId, pageId, warnUnconfirmed) {
+  try {
+    let response = await context.client.request({
+      route: "material.upload.terminate",
+      params: { projectId, uploadId },
+      body: { page_id: pageId, reason: "owner_cancel" }
+    }), state = readStringField(response.body, "state");
+    context.progress({ event: "session_closed", upload_id: uploadId, state: state ?? null });
+  } catch (error) {
+    if (!warnUnconfirmed)
+      return;
+    context.warnings.push({
+      code: "upload_terminate_unconfirmed",
+      message: `\u5DF2\u8BF7\u6C42\u7EC8\u6B62\u672C\u6B21\u4E0A\u4F20\u4F1A\u8BDD\uFF0C\u4F46\u7AD9\u70B9\u6CA1\u6709\u786E\u8BA4\uFF08${error instanceof Error ? error.message : String(error)}\uFF09\uFF1B\u4F1A\u8BDD\u4F1A\u5728 60 \u79D2\u79DF\u7EA6\u5230\u671F\u540E\u88AB\u81EA\u52A8\u6536\u5C3E\u3002`
+    });
+  }
+}
+async function runMaterialUpload(context) {
+  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT3), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT), targetDirectory = optionString(context.values, "target-directory") ?? ".", manifest = collectLocalManifest(optionStrings(context.values, "path"), context.cwd), explicitKey = optionString(context.values, "submission-key");
+  if (explicitKey !== void 0 && !SUBMISSION_KEY_PATTERN2.test(explicitKey))
+    throw localInputError("invalid_arguments", "--submission-key \u53EA\u5141\u8BB8 1..128 \u4F4D\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u6216\u8FDE\u5B57\u7B26\u3002");
+  let facts = await context.client.request({
+    route: "material.directory",
+    params: { projectId },
+    query: { library_type: library }
+  }), preview = await context.client.request({
+    route: "material.upload.preview",
+    params: { projectId },
+    body: {
+      library_type: library,
+      target_directory: targetDirectory,
+      directory_contract_version: MATERIAL_IMPORT_DIRECTORY_CONTRACT_VERSION,
+      selection: manifest.selection,
+      files: manifest.files.map((file) => ({ relative_path: file.relative_path, size_bytes: file.size_bytes }))
+    }
+  }), accepted = reviewedFiles(readField(preview.body, "accepted_files"), "\u63A5\u53D7"), excluded = reviewedFiles(readField(preview.body, "excluded_files"), "\u6392\u9664"), noticeVersion = readStringField(preview.body, "notice_version"), directoryContract = readStringField(preview.body, "directory_contract_version") ?? MATERIAL_IMPORT_DIRECTORY_CONTRACT_VERSION, acceptedBytes = readField(preview.body, "accepted_bytes"), resolvedTarget = readStringField(preview.body, "target_directory") ?? targetDirectory;
+  if (context.progress({
+    event: "upload_review",
+    library_type: library,
+    target_directory: resolvedTarget,
+    upload_enabled: readField(preview.body, "upload_enabled") === !0,
+    accepted_files: accepted.map((file) => ({ relative_path: file.relative_path, size_bytes: file.size_bytes })),
+    excluded_files: excluded,
+    accepted_bytes: acceptedBytes ?? null,
+    excluded_bytes: readField(preview.body, "excluded_bytes") ?? null,
+    session_limit_bytes: readField(preview.body, "session_limit_bytes") ?? null,
+    single_file_limit_bytes: readField(preview.body, "single_file_limit_bytes") ?? null,
+    notice_version: noticeVersion ?? null,
+    credit_balance: readField(facts.body, "credit_balance") ?? null
+  }), readField(preview.body, "upload_enabled") !== !0)
+    throw businessRejection(
+      "upload_unavailable",
+      "\u5F53\u524D\u7AD9\u70B9\u6216\u8282\u70B9\u6682\u65F6\u65E0\u6CD5\u63A5\u6536\u76F4\u4F20\uFF0C\u8BF7\u6539\u7528\u7F51\u76D8\u5BFC\u5165\u3002",
+      { disabled_reason: readField(preview.body, "disabled_reason") ?? null }
+    );
+  if (accepted.length === 0)
+    throw localInputError(
+      "nothing_to_upload",
+      "\u670D\u52A1\u7AEF\u590D\u6838\u540E\u6CA1\u6709\u53EF\u4E0A\u4F20\u7684\u53D7\u652F\u6301\u7D20\u6750\uFF1A\u8BF7\u6309\u6392\u9664\u6E05\u5355\u8C03\u6574\u540E\u91CD\u65B0\u8FD0\u884C\u3002",
+      { excluded_files: excluded }
+    );
+  if (!optionFlag(context.values, "confirm-charge"))
+    throw localInputError(
+      "charge_confirmation_required",
+      "\u76F4\u4F20\u5728\u8282\u70B9\u5C01\u5B58\u771F\u5B9E\u6587\u4EF6\u540E\u4F1A\u6309\u5BFC\u5165\u516C\u5F0F\u81EA\u52A8\u8BA1\u8D39\uFF1A\u8BF7\u5148\u4E0E\u7528\u6237\u786E\u8BA4\uFF0C\u518D\u7528 --confirm-charge \u660E\u786E\u786E\u8BA4\u672C\u6B21\u4E0A\u4F20\u3002"
+    );
+  if (noticeVersion === void 0)
+    throw businessRejection("notice_version_missing", "\u670D\u52A1\u7AEF\u590D\u6838\u6CA1\u6709\u8FD4\u56DE\u8BA1\u8D39\u63D0\u793A\u7248\u672C\uFF0C\u4E0D\u80FD\u63D0\u4EA4\u53D7\u7406\u8BF7\u6C42\u3002");
+  let localByOriginal = new Map(manifest.files.map((file) => [file.relative_path, file]));
+  for (let file of accepted) {
+    let local = localByOriginal.get(file.original_relative_path);
+    if (local === void 0 || local.size_bytes !== file.size_bytes)
+      throw businessRejection(
+        "local_file_changed",
+        `\u672C\u5730\u6587\u4EF6\u4E0E\u590D\u6838\u6E05\u5355\u4E0D\u4E00\u81F4\uFF1A${file.original_relative_path}\u3002\u8BF7\u91CD\u65B0\u8FD0\u884C\u3002`,
+        { relative_path: file.original_relative_path }
+      );
+  }
+  let submissionKey = explicitKey ?? randomUUID2(), pageId = randomUUID2(), abort = new AbortController(), interrupted = !1, onSignal = () => {
+    interrupted || (interrupted = !0, abort.abort(businessRejection("upload_interrupted", "\u672C\u6B21\u4E0A\u4F20\u5DF2\u88AB\u4E2D\u65AD\uFF0C\u6B63\u5728\u7EC8\u6B62\u4E0A\u4F20\u4F1A\u8BDD\u3002")));
+  };
+  process.on("SIGINT", onSignal), process.on("SIGTERM", onSignal);
+  let uploadId, lease = null, sealed = !1, terminalState = null;
+  try {
+    let admission = await context.client.request({
+      route: "material.upload.admit",
+      params: { projectId },
+      body: {
+        submission_key: submissionKey,
+        notice_version: noticeVersion,
+        library_type: library,
+        target_directory: resolvedTarget,
+        directory_contract_version: directoryContract,
+        selection: manifest.selection,
+        // The admission revalidates the physical selection, exactly like the web panel: the reviewed
+        // content paths below the root belong to the tus metadata, not to this list.
+        files: accepted.map((file) => ({ relative_path: file.original_relative_path, size_bytes: file.size_bytes })),
+        page_id: pageId
+      }
+    });
+    uploadId = readStringField(admission.body, "upload_id");
+    let sessionToken = readStringField(admission.body, "token"), tusUrl = readStringField(admission.body, "tus_url");
+    if (uploadId === void 0 || sessionToken === void 0 || tusUrl === void 0)
+      throw businessRejection(
+        "upload_not_writable",
+        "\u53D7\u7406\u8BF7\u6C42\u6CA1\u6709\u8FD4\u56DE\u53EF\u7528\u7684\u4E0A\u4F20\u4F1A\u8BDD\uFF1A\u8BE5\u4F1A\u8BDD\u53EF\u80FD\u5DF2\u7ECF\u5C01\u5B58\u6216\u7ED3\u675F\uFF0C\u8BF7\u91CD\u65B0\u8FD0\u884C\u3002",
+        { upload_id: uploadId ?? null }
+      );
+    let sessionId = uploadId;
+    abort.signal.throwIfAborted(), context.progress({
+      event: "session_admitted",
+      upload_id: sessionId,
+      request_id: readStringField(admission.body, "request_id") ?? null,
+      replayed: readField(admission.body, "replayed") === !0,
+      accepted_bytes: acceptedBytes ?? null
+    });
+    let tusEndpoint = new URL(tusUrl, context.site).toString(), sessionLease = { token: sessionToken, failure: null, timer: null };
+    lease = sessionLease;
+    let receivedByPath = /* @__PURE__ */ new Map(), pending = [...accepted], totalAcceptedBytes = accepted.reduce((total, file) => total + file.size_bytes, 0), reportProgress = () => {
+      let received = [...receivedByPath.values()].reduce((total, bytes) => total + bytes, 0);
+      context.progress({
+        event: "upload_progress",
+        upload_id: sessionId,
+        received_bytes: received,
+        total_bytes: totalAcceptedBytes,
+        files: accepted.map((file) => ({
+          relative_path: file.relative_path,
+          size_bytes: file.size_bytes,
+          received_bytes: receivedByPath.get(file.relative_path) ?? 0
+        }))
+      });
+    };
+    startLease(context, projectId, sessionId, pageId, sessionLease, abort);
+    let worker = async () => {
+      try {
+        for (; ; ) {
+          if (abort.signal.aborted)
+            return;
+          let file = pending.shift();
+          if (file === void 0)
+            return;
+          let local = localByOriginal.get(file.original_relative_path), result = await tusUploadFile({
+            endpoint: tusEndpoint,
+            uploadId: sessionId,
+            relativePath: file.relative_path,
+            localPath: local.absolute_path,
+            fetchImpl: context.fetchImpl,
+            token: () => sessionLease.token,
+            signal: abort.signal,
+            onProgress: (receivedBytes) => {
+              receivedByPath.set(file.relative_path, Math.min(receivedBytes, file.size_bytes)), reportProgress();
+            }
+          });
+          receivedByPath.set(file.relative_path, Math.min(result.receivedBytes, file.size_bytes)), reportProgress();
+        }
+      } catch (error) {
+        throw abort.abort(error), error;
+      }
+    }, outcomes = await Promise.allSettled(
+      Array.from({ length: Math.min(MAX_CONCURRENT_FILES, pending.length) }, () => worker())
+    );
+    if (interrupted && abort.signal.throwIfAborted(), sessionLease.failure !== null)
+      throw sessionLease.failure;
+    let rejected = outcomes.find((outcome) => outcome.status === "rejected");
+    if (rejected !== void 0)
+      throw rejected.reason;
+    await requestSeal(context, projectId, sessionId, pageId, abort.signal), sealed = !0;
+    let body = await awaitTerminalSession(context, projectId, sessionId, abort);
+    if (terminalState = readStringField(body, "state") ?? null, terminalState === "failed") {
+      let failureSummary = readStringField(body, "failure_summary");
+      throw businessRejection(
+        "upload_failed",
+        `\u670D\u52A1\u7AEF\u5224\u5B9A\u672C\u6B21\u4E0A\u4F20\u5931\u8D25\uFF1A${failureSummary ?? "\u672A\u63D0\u4F9B\u539F\u56E0"}\u3002\u672A\u5B8C\u6210\u7684\u6587\u4EF6\u4F1A\u88AB\u6E05\u7406\uFF0C\u672A\u63D0\u4EA4\u7684\u6D88\u8D39\u6309\u65E2\u6709\u89C4\u5219\u8FD4\u8FD8\u3002`,
+        {
+          upload_id: sessionId,
+          request_id: body.request_id ?? null,
+          state: terminalState,
+          cleanup_status: body.cleanup_status ?? null,
+          failure_summary: failureSummary ?? null
+        }
+      );
+    }
+    if (terminalState !== "completed")
+      throw businessRejection(
+        "upload_cancelled",
+        "\u670D\u52A1\u7AEF\u5DF2\u53D6\u6D88\u672C\u6B21\u4E0A\u4F20\u4F1A\u8BDD\u5E76\u505C\u6B62\u5199\u5165\uFF0C\u7D20\u6750\u6CA1\u6709\u5165\u5E93\uFF1B\u91CD\u65B0\u8FD0\u884C\u4F1A\u521B\u5EFA\u65B0\u7684\u4E0A\u4F20\u4F1A\u8BDD\u3002",
+        {
+          upload_id: sessionId,
+          request_id: body.request_id ?? null,
+          state: terminalState,
+          cleanup_status: body.cleanup_status ?? null
+        }
+      );
+    if (interrupted)
+      throw businessRejection("upload_interrupted", "\u672C\u6B21\u8FD0\u884C\u5728\u4E0A\u4F20\u5B8C\u6210\u540E\u88AB\u4E2D\u65AD\u3002");
+    return {
+      upload_id: sessionId,
+      request_id: body.request_id ?? null,
+      library_type: library,
+      target_directory: body.target_directory ?? resolvedTarget,
+      directory_contract_version: body.directory_contract_version ?? directoryContract,
+      state: body.state ?? null,
+      accepted_bytes: body.accepted_bytes ?? acceptedBytes ?? null,
+      received_bytes: body.received_bytes ?? null,
+      session_limit_bytes: body.session_limit_bytes ?? null,
+      single_file_limit_bytes: body.single_file_limit_bytes ?? null,
+      files: body.files ?? null,
+      excluded_files: body.excluded_files ?? excluded,
+      cleanup_status: body.cleanup_status ?? null,
+      failure_summary: body.failure_summary ?? null,
+      credit_cost: body.credit_cost ?? null,
+      submission_key: submissionKey,
+      submission_key_source: explicitKey === void 0 ? "run" : "explicit",
+      replayed: readField(admission.body, "replayed") === !0
+    };
+  } catch (error) {
+    throw interrupted ? businessRejection(
+      "upload_interrupted",
+      terminalState === "completed" ? "\u672C\u6B21\u8FD0\u884C\u5728\u670D\u52A1\u7AEF\u786E\u8BA4\u4E0A\u4F20\u5B8C\u6210\u4E4B\u540E\u88AB\u4E2D\u65AD\uFF1A\u7D20\u6750\u5DF2\u63D0\u4EA4\u5E76\u4FDD\u7559\uFF0C\u8BF7\u7528 request.watch \u4E0E\u7D20\u6750\u76EE\u5F55\u6838\u5BF9\u7ED3\u679C\u3002" : sealed ? "\u672C\u6B21\u4E0A\u4F20\u5DF2\u5C01\u5B58\u4F46\u8FD8\u6CA1\u6709\u786E\u8BA4\u7EC8\u6001\uFF0C\u5DF2\u8BF7\u6C42\u7EC8\u6B62\u4E0A\u4F20\u4F1A\u8BDD\uFF1B\u5DF2\u63D0\u4EA4\u7684\u7D20\u6750\u4E0D\u4F1A\u56E0\u6B64\u88AB\u5220\u9664\uFF0C\u8BF7\u7528 request.watch \u6838\u5BF9\u6700\u7EC8\u7ED3\u679C\u3002" : uploadId === void 0 ? "\u672C\u6B21\u4E0A\u4F20\u5DF2\u88AB\u4E2D\u65AD\uFF0C\u53D7\u7406\u8BF7\u6C42\u6CA1\u6709\u5F97\u5230\u786E\u8BA4\uFF1B\u82E5\u7AD9\u70B9\u5DF2\u53D7\u7406\uFF0C\u8BE5\u4F1A\u8BDD\u4F1A\u5728 60 \u79D2\u79DF\u7EA6\u5230\u671F\u540E\u81EA\u52A8\u6536\u5C3E\u3002" : "\u672C\u6B21\u4E0A\u4F20\u5DF2\u88AB\u4E2D\u65AD\uFF0C\u6B63\u5728\u7EC8\u6B62\u4E0A\u4F20\u4F1A\u8BDD\uFF1B\u5DF2\u786E\u8BA4\u7684\u5B57\u8282\u4E0D\u4F1A\u5165\u5E93\uFF0C\u91CD\u65B0\u8FD0\u884C\u4F1A\u521B\u5EFA\u65B0\u7684\u4E0A\u4F20\u4F1A\u8BDD\u3002",
+      { upload_id: uploadId ?? null, state: terminalState, sealed }
+    ) : !isCliError(error) && lease !== null && lease.failure !== null ? lease.failure : error;
+  } finally {
+    lease !== null && clearInterval(lease.timer ?? void 0), uploadId !== void 0 && await terminateSession(context, projectId, uploadId, pageId, terminalState === null), process.removeListener("SIGINT", onSignal), process.removeListener("SIGTERM", onSignal);
+  }
+}
+var materialUploadCommands = [
+  {
+    id: "material.upload",
+    summary: "\u628A\u672C\u5730\u6587\u4EF6\u6216\u76EE\u5F55\u76F4\u63A5\u4E0A\u4F20\u5230\u67D0\u4E2A\u7D20\u6750\u5E93\uFF08\u5C01\u5B58\u540E\u81EA\u52A8\u8BA1\u8D39\uFF0C\u9700\u8981\u663E\u5F0F\u786E\u8BA4\uFF09",
+    usage: "material.upload --project <\u9879\u76EE ID> --library primary|talking_head|voiceover --path <\u672C\u5730\u6587\u4EF6\u6216\u76EE\u5F55> [--path ...] [--target-directory <\u5E93\u5185\u76EE\u5F55>] [--submission-key <\u5E42\u7B49\u952E>] --confirm-charge",
+    options: {
+      ...PROJECT_OPTION,
+      ...LIBRARY_OPTION,
+      path: { type: "string", multiple: !0 },
+      "target-directory": { type: "string" },
+      "submission-key": { type: "string" },
+      "confirm-charge": { type: "boolean" }
+    },
+    needsCredential: !0,
+    chargeable: !0,
+    async run(context) {
+      return runMaterialUpload(context);
+    },
+    help: {
+      note: "\u4E00\u6B21\u8FD0\u884C\u5C31\u662F\u4E00\u4E2A\u4E0A\u4F20\u4F1A\u8BDD\uFF1A\u4E2D\u65AD\u3001\u6743\u5A01\u62D2\u7EDD\u6216\u8FDB\u7A0B\u7ED3\u675F\u65F6\u5C3D\u529B\u7EC8\u6B62\uFF0C\u4E0D\u8DE8\u8FD0\u884C\u7EED\u4F20\uFF1B\u91CD\u8DD1\u662F\u65B0\u4F1A\u8BDD\u3002\u76EE\u5F55\u4FDD\u7559\u5B50\u76EE\u5F55\u5C42\u7EA7\uFF0C\u767D\u540D\u5355\u5916\u6587\u4EF6\u7531\u670D\u52A1\u7AEF\u5217\u4E3A\u6392\u9664\u9879\u3002",
+      options: {
+        path: "\u672C\u5730\u6587\u4EF6\u6216\u76EE\u5F55\uFF1B\u53EF\u91CD\u590D\u51FA\u73B0\uFF0C\u76EE\u5F55\u5185\u7684\u76F8\u5BF9\u8DEF\u5F84\u4FDD\u7559\u5B50\u76EE\u5F55\u5C42\u7EA7\u3002",
+        "target-directory": "\u7D20\u6750\u5E93\u5185\u7684\u76EE\u6807\u76EE\u5F55\uFF0C\u9ED8\u8BA4 .\uFF08\u5E93\u6839\uFF09\uFF1B\u5FC5\u987B\u662F\u670D\u52A1\u7AEF\u63A5\u53D7\u7684\u5E93\u91CC\u5DF2\u6709\u76EE\u5F55\u3002"
+      },
+      next: ["request.watch --project <\u9879\u76EE ID> --request <request_id>", "material.directory --project <\u9879\u76EE ID> --library <\u5E93\u7C7B\u578B>"]
+    }
+  }
+];
+
 // packages/mycutbuddy-cli/src/commands/material.ts
-var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", LIBRARY_HINT = "\u7D20\u6750\u5E93\u7C7B\u578B\uFF1Aprimary\u3001talking_head \u6216 voiceover\uFF08\u5FC5\u987B\u663E\u5F0F\u6307\u5B9A\uFF09", materialCommands = [
+var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", LIBRARY_HINT2 = "\u7D20\u6750\u5E93\u7C7B\u578B\uFF1Aprimary\u3001talking_head \u6216 voiceover\uFF08\u5FC5\u987B\u663E\u5F0F\u6307\u5B9A\uFF09", materialCommands = [
   {
     id: "material.directory",
     summary: "\u67E5\u8BE2\u67D0\u4E2A\u7D20\u6750\u5E93\u7684\u7BA1\u7406\u76EE\u5F55\uFF08\u542B\u9501\u5B9A\u72B6\u6001\u4E0E\u63D0\u793A\u7248\u672C\uFF09",
@@ -1710,7 +2333,7 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT3), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT), taskId = optionString(context.values, "task");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT2), taskId = optionString(context.values, "task");
       return (await context.client.request({
         route: "material.directory",
         params: { projectId },
@@ -1726,7 +2349,7 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT3), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT), payload = readOperationsPayload(context.values, library);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT2), payload = readOperationsPayload(context.values, library);
       return (await context.client.request({
         route: "material.manage",
         params: { projectId },
@@ -1755,7 +2378,7 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT3), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT), operationId = requiredStringOption(context.values, "operation", "\u5BFC\u5165\u64CD\u4F5C ID\uFF08import_operation.operation_id\uFF09");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), library = requiredEnumOption(context.values, "library", MATERIAL_LIBRARY_TYPES, LIBRARY_HINT2), operationId = requiredStringOption(context.values, "operation", "\u5BFC\u5165\u64CD\u4F5C ID\uFF08import_operation.operation_id\uFF09");
       return (await context.client.request({
         route: "material.import-failure.dismiss",
         params: { projectId },
@@ -1779,7 +2402,8 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
       fields: [
         { key: "library_type", required: !0, type: "enum", values: MATERIAL_LIBRARY_TYPES, description: "\u76EE\u6807\u7D20\u6750\u5E93\u3002" },
         { key: "share_url", required: !0, type: "string", description: "\u767E\u5EA6\u7F51\u76D8\u5206\u4EAB\u94FE\u63A5\u3002" },
-        { key: "extraction_code", type: "string", description: "\u63D0\u53D6\u7801\uFF1B\u94FE\u63A5\u81EA\u5E26 pwd \u65F6\u53EF\u7701\u7565\u3002" }
+        { key: "extraction_code", type: "string", description: "\u63D0\u53D6\u7801\uFF1B\u94FE\u63A5\u81EA\u5E26 pwd \u65F6\u53EF\u7701\u7565\u3002" },
+        { key: "target_directory", type: "string", description: "\u5E93\u5185\u76EE\u6807\u76EE\u5F55\uFF1B\u7701\u7565\u6216\u4F20 . \u8868\u793A\u5E93\u6839\uFF0C\u5FC5\u987B\u662F\u5DF2\u63D0\u4EA4\u4E14\u5B58\u5728\u7684\u76EE\u5F55\u3002" }
       ],
       example: {
         library_type: "primary",
@@ -1809,7 +2433,8 @@ var PROJECT_HINT3 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
       example: { library_type: "primary", shot_mode: "mixed", additional_prompt: "\u53BB\u9664\u6240\u6709\u4EBA\u7269\u53E3\u64AD\u753B\u9762\uFF0C\u53EA\u4FDD\u7559\u4EA7\u54C1\u753B\u9762" },
       next: ["request.watch --project <\u9879\u76EE ID> --request <request_id>"]
     }
-  }
+  },
+  ...materialUploadCommands
 ];
 function readOperationsPayload(values, library) {
   let payload = readPayload(values, { required: !0, hint: '{ "operations": [...] }' }), operations = payload.operations;
@@ -1834,7 +2459,7 @@ function rethrowWithIdentity(error, identity) {
 }
 
 // packages/mycutbuddy-cli/src/commands/preset.ts
-var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", STYLE_HINT = "\u526A\u8F91\u98CE\u683C ID\uFF0C\u6765\u81EA preset.style.list \u7684\u8FD4\u56DE\u503C", IMPORT_HINT = "\u5B57\u5E55\u6837\u5F0F\u5BFC\u5165 ID\uFF0C\u6765\u81EA preset.style.import.submit \u7684\u8FD4\u56DE\u503C", presetCommands = [
+var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", STYLE_HINT = "\u526A\u8F91\u98CE\u683C ID\uFF0C\u6765\u81EA preset.style.list \u7684\u8FD4\u56DE\u503C", IMPORT_HINT = "\u5B57\u5E55\u6837\u5F0F\u5BFC\u5165 ID\uFF0C\u6765\u81EA preset.style.import.submit \u7684\u8FD4\u56DE\u503C", presetCommands = [
   {
     id: "preset.style.list",
     summary: "\u5217\u51FA\u67D0\u4E2A\u526A\u8F91\u5F62\u5F0F\u76EE\u5F55\u4E0B\u7684\u526A\u8F91\u98CE\u683C\uFF08\u542B\u7CFB\u7EDF\u4E0E\u4E2A\u4EBA\uFF09",
@@ -1843,7 +2468,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), form = optionEnum(context.values, "form", EDITING_FORMS);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), form = optionEnum(context.values, "form", EDITING_FORMS);
       return (await context.client.request({
         route: "preset.style.list",
         params: { projectId },
@@ -1859,7 +2484,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetId = requiredStringOption(context.values, "style", STYLE_HINT), form = optionEnum(context.values, "form", EDITING_FORMS);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetId = requiredStringOption(context.values, "style", STYLE_HINT), form = optionEnum(context.values, "form", EDITING_FORMS);
       return (await context.client.request({
         route: "preset.style.get",
         params: { projectId, presetId },
@@ -1875,7 +2500,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), payload = readPayload(context.values, { required: !0, hint: "\u526A\u8F91\u98CE\u683C\u5B57\u6BB5" });
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), payload = readPayload(context.values, { required: !0, hint: "\u526A\u8F91\u98CE\u683C\u5B57\u6BB5" });
       return (await context.client.request({
         route: "preset.style.create",
         params: { projectId },
@@ -1905,7 +2530,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetId = requiredStringOption(context.values, "style", STYLE_HINT), payload = readPayload(context.values, { required: !0, hint: "\u8981\u4FEE\u6539\u7684\u526A\u8F91\u98CE\u683C\u5B57\u6BB5" });
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetId = requiredStringOption(context.values, "style", STYLE_HINT), payload = readPayload(context.values, { required: !0, hint: "\u8981\u4FEE\u6539\u7684\u526A\u8F91\u98CE\u683C\u5B57\u6BB5" });
       return (await context.client.request({
         route: "preset.style.update",
         params: { projectId, presetId },
@@ -1930,7 +2555,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetId = requiredStringOption(context.values, "style", STYLE_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetId = requiredStringOption(context.values, "style", STYLE_HINT);
       return (await context.client.request({
         route: "preset.style.archive",
         params: { projectId, presetId }
@@ -1945,7 +2570,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetType = optionEnum(context.values, "type", PRESET_TYPES), page = optionInteger(context.values, "page", { fallback: 1, minimum: 1, maximum: 1e5 }), pageSize = optionPageSize(context.values);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetType = optionEnum(context.values, "type", PRESET_TYPES), page = optionInteger(context.values, "page", { fallback: 1, minimum: 1, maximum: 1e5 }), pageSize = optionPageSize(context.values);
       return (await context.client.request({
         route: "preset.style.import.list",
         params: { projectId },
@@ -1961,7 +2586,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), requestKey = requiredStringOption(
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), requestKey = requiredStringOption(
         context.values,
         "request-key",
         "\u672C\u6B21\u5BFC\u5165\u7684\u552F\u4E00\u952E\uFF08\u540C\u952E\u540C\u8F93\u5165\u4F1A\u88AB\u670D\u52A1\u7AEF\u91CD\u653E\uFF09"
@@ -2001,7 +2626,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), importId = requiredStringOption(context.values, "import", IMPORT_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), importId = requiredStringOption(context.values, "import", IMPORT_HINT);
       return (await context.client.request({
         route: "preset.style.import.get",
         params: { projectId, importId }
@@ -2016,7 +2641,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), importId = requiredStringOption(context.values, "import", IMPORT_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), importId = requiredStringOption(context.values, "import", IMPORT_HINT);
       return (await context.client.request({
         route: "preset.style.import.delete",
         params: { projectId, importId }
@@ -2031,7 +2656,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), importId = requiredStringOption(context.values, "import", IMPORT_HINT), draftId = requiredStringOption(context.values, "draft", "\u8349\u7A3F ID\uFF0C\u6765\u81EA\u5BFC\u5165\u8BB0\u5F55 drafts \u4E2D\u7684\u771F\u5B9E\u503C");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), importId = requiredStringOption(context.values, "import", IMPORT_HINT), draftId = requiredStringOption(context.values, "draft", "\u8349\u7A3F ID\uFF0C\u6765\u81EA\u5BFC\u5165\u8BB0\u5F55 drafts \u4E2D\u7684\u771F\u5B9E\u503C");
       return (await context.client.request({
         route: "preset.style.import.select-draft",
         params: { projectId, importId },
@@ -2047,7 +2672,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), importId = requiredStringOption(context.values, "import", IMPORT_HINT), payload = readPayload(context.values, { required: !0, hint: '{ "items": [...] }' });
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), importId = requiredStringOption(context.values, "import", IMPORT_HINT), payload = readPayload(context.values, { required: !0, hint: '{ "items": [...] }' });
       return (await context.client.request({
         route: "preset.style.import.save-items",
         params: { projectId, importId },
@@ -2069,7 +2694,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetType = requiredEnumOption(context.values, "type", PRESET_TYPES, "\u5B57\u5E55\u9884\u8BBE\u7C7B\u578B");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetType = requiredEnumOption(context.values, "type", PRESET_TYPES, "\u5B57\u5E55\u9884\u8BBE\u7C7B\u578B");
       return (await context.client.request({
         route: "preset.subtitle.list",
         params: { projectId },
@@ -2085,7 +2710,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetId = requiredStringOption(context.values, "subtitle-preset", "\u4E2A\u4EBA\u5B57\u5E55\u9884\u8BBE ID"), payload = readPayload(context.values, { required: !0, hint: "name \u6216 description" });
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetId = requiredStringOption(context.values, "subtitle-preset", "\u4E2A\u4EBA\u5B57\u5E55\u9884\u8BBE ID"), payload = readPayload(context.values, { required: !0, hint: "name \u6216 description" });
       return (await context.client.request({
         route: "preset.subtitle.update",
         params: { projectId, presetId },
@@ -2101,7 +2726,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT4), presetId = requiredStringOption(context.values, "subtitle-preset", "\u4E2A\u4EBA\u5B57\u5E55\u9884\u8BBE ID");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), presetId = requiredStringOption(context.values, "subtitle-preset", "\u4E2A\u4EBA\u5B57\u5E55\u9884\u8BBE ID");
       return (await context.client.request({
         route: "preset.subtitle.archive",
         params: { projectId, presetId }
@@ -2111,7 +2736,7 @@ var PROJECT_HINT4 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
 ];
 
 // packages/mycutbuddy-cli/src/commands/project.ts
-var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", projectCommands = [
+var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", projectCommands = [
   {
     id: "project.list",
     summary: "\u5217\u51FA\u5F53\u524D\u8D26\u53F7\u7684\u9879\u76EE",
@@ -2143,7 +2768,7 @@ var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6);
       return (await context.client.request({ route: "project.get", params: { projectId } })).body;
     }
   },
@@ -2155,7 +2780,7 @@ var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5), name = requiredStringOption(context.values, "name", "\u65B0\u7684\u9879\u76EE\u540D\u79F0");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), name = requiredStringOption(context.values, "name", "\u65B0\u7684\u9879\u76EE\u540D\u79F0");
       return (await context.client.request({ route: "project.rename", params: { projectId }, body: { name } })).body;
     }
   },
@@ -2167,7 +2792,7 @@ var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT5);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6);
       return (await context.client.request({ route: "project.delete", params: { projectId } })).body;
     }
   }
@@ -2241,7 +2866,7 @@ function nextStepFor(stage, projection) {
 }
 
 // packages/mycutbuddy-cli/src/commands/request.ts
-var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", REQUEST_HINT = "\u8BA1\u8D39\u8BF7\u6C42 ID\uFF0C\u6765\u81EA\u4EFB\u610F\u6536\u8D39\u63D0\u4EA4\u547D\u4EE4\u8FD4\u56DE\u7684 request_id", REQUEST_TERMINAL_STATES = {
+var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", REQUEST_HINT = "\u8BA1\u8D39\u8BF7\u6C42 ID\uFF0C\u6765\u81EA\u4EFB\u610F\u6536\u8D39\u63D0\u4EA4\u547D\u4EE4\u8FD4\u56DE\u7684 request_id", REQUEST_TERMINAL_STATES = {
   failed: !0,
   cancelled: !0,
   submitted: !0
@@ -2286,10 +2911,10 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
         fallback: 5,
         minimum: 1,
         maximum: 300
-      }), deadline = Date.now() + timeoutSeconds * 1e3, observations = 0, request = null, state, shot = null;
+      }), deadline = Date.now() + timeoutSeconds * 1e3, observations = 0, request2 = null, state, shot = null;
       for (; ; ) {
-        request = await readRequest(context), state = readStringField(request, "state"), shot = readShotStageView(request), observations += 1;
-        let executionTaskId = readStringField(request, "execution_task_id");
+        request2 = await readRequest(context), state = readStringField(request2, "state"), shot = readShotStageView(request2), observations += 1;
+        let executionTaskId = readStringField(request2, "execution_task_id");
         if (context.progress({
           event: "request_observation",
           state: state ?? null,
@@ -2299,7 +2924,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
           observation: observations
         }), shot !== null && (shot.stopsObservation || state === "failed" || state === "cancelled"))
           return pushShotStageWarning(context.warnings, shot), {
-            request,
+            request: request2,
             terminal: !0,
             execution_task_id: executionTaskId ?? null,
             execution_continues: !1,
@@ -2319,7 +2944,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
             code: "execution_continues",
             message: `\u8BA1\u8D39\u8BF7\u6C42\u5DF2\u521B\u5EFA\u6267\u884C\u4EFB\u52A1 ${executionTaskId}\uFF1B\u8BF7\u6C42\u672C\u8EAB\u5DF2\u7ED3\u675F\uFF0C\u4F46\u6267\u884C\u4ECD\u5728\u7EE7\u7EED\uFF0C\u8BF7\u7528 task.watch \u6216 material.directory \u8BFB\u53D6\u540E\u7EED\u4E8B\u5B9E\u3002`
           }), {
-            request,
+            request: request2,
             terminal: !0,
             execution_task_id: executionTaskId ?? null,
             execution_continues: executionContinues,
@@ -2339,9 +2964,9 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
         code: "watch_incomplete",
         message: shot === null ? `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u8BF7\u6C42\u72B6\u6001\u4ECD\u662F ${state ?? "\u672A\u77E5"}\uFF1B\u8FD9\u4E0D\u8868\u793A\u8BF7\u6C42\u5DF2\u7ECF\u5B8C\u6210\u3002` : `\u89C2\u5BDF\u7A97\u53E3\u5DF2\u7ED3\u675F\uFF0C\u670D\u52A1\u7AEF\u955C\u5934\u9636\u6BB5\u4ECD\u662F ${shot.stage}\uFF08\u8BF7\u6C42\u72B6\u6001 ${state ?? "\u672A\u77E5"}\uFF09\uFF1B\u8FD9\u4E0D\u8868\u793A\u6574\u6761\u955C\u5934\u5904\u7406\u94FE\u5DF2\u7ECF\u5B8C\u6210\u3002`
       }), {
-        request,
+        request: request2,
         terminal: !1,
-        execution_task_id: readStringField(request, "execution_task_id") ?? null,
+        execution_task_id: readStringField(request2, "execution_task_id") ?? null,
         // Active shot stages keep working in the background; an ordinary request keeps the
         // existing `false` because its remaining work is read from another command.
         execution_continues: shot !== null,
@@ -2367,7 +2992,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), requestId = requiredStringOption(context.values, "request", REQUEST_HINT), response = await context.client.request({
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), requestId = requiredStringOption(context.values, "request", REQUEST_HINT), response = await context.client.request({
         route: "request.cancel",
         params: { projectId, requestId }
       }), state = readStringField(response.body, "state");
@@ -2385,7 +3010,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
       return (await context.client.request({
         route: "request.recreate",
         params: { projectId, requestId }
@@ -2394,19 +3019,19 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   }
 ];
 async function readRequest(context) {
-  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
+  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
   return (await context.client.request({
     route: "request.get",
     params: { projectId, requestId }
   })).body;
 }
 function delaySeconds2(seconds) {
-  let { promise, resolve: resolve3 } = Promise.withResolvers();
-  return setTimeout(resolve3, seconds * 1e3), promise;
+  let { promise, resolve: resolve4 } = Promise.withResolvers();
+  return setTimeout(resolve4, seconds * 1e3), promise;
 }
 
 // packages/mycutbuddy-cli/src/commands/task.ts
-var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", TASK_HINT = "\u4EFB\u52A1 ID\uFF0C\u6765\u81EA task.list \u6216 editing.submit \u8FD4\u56DE\u7684 execution_task_id", taskCommands = [
+var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", TASK_HINT = "\u4EFB\u52A1 ID\uFF0C\u6765\u81EA task.list \u6216 editing.submit \u8FD4\u56DE\u7684 execution_task_id", taskCommands = [
   {
     id: "task.list",
     summary: "\u5206\u9875\u5217\u51FA\u5355\u8F68\u526A\u8F91\u4EFB\u52A1\u4E0E\u8BA1\u8D39\u8BF7\u6C42",
@@ -2420,7 +3045,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), page = optionInteger(context.values, "page", { fallback: 1, minimum: 1, maximum: 1e5 }), pageSize = optionPageSize(context.values);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), page = optionInteger(context.values, "page", { fallback: 1, minimum: 1, maximum: 1e5 }), pageSize = optionPageSize(context.values);
       return (await context.client.request({
         route: "task.list",
         params: { projectId },
@@ -2521,7 +3146,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
       return (await context.client.request({
         route: "task.cancel",
         params: { projectId, taskId },
@@ -2537,7 +3162,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
       return (await context.client.request({
         route: "task.delete",
         params: { projectId, taskId },
@@ -2553,7 +3178,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
       return (await context.client.request({
         route: "task.recreate",
         params: { projectId, taskId }
@@ -2562,12 +3187,12 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   }
 ];
 async function readTask(context) {
-  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
   return context.client.request({ route: "task.get", params: { projectId, taskId } });
 }
 function delaySeconds3(seconds) {
-  let { promise, resolve: resolve3 } = Promise.withResolvers();
-  return setTimeout(resolve3, seconds * 1e3), promise;
+  let { promise, resolve: resolve4 } = Promise.withResolvers();
+  return setTimeout(resolve4, seconds * 1e3), promise;
 }
 
 // packages/mycutbuddy-cli/src/commands/version.ts

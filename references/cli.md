@@ -131,6 +131,20 @@ node scripts/mycutbuddy.mjs project.delete --project <项目 ID>
 
 `material.directory` 返回当前库摘要、`safe_material_directory`、`locked`、活动工作、索引状态、当前计费提示与余额；主素材库另有 `unprocessed_video_count`、`primary_shot_notice_version` 与 `shot_processing`。写入前必须读取它，发生锁定、索引过期或资源归档时说明真实原因。带 `--task <任务 ID>` 时读取该管理任务的 `status`，并重读目录确认结果。
 
+### 素材直传（本地文件或目录）
+
+```text
+node scripts/mycutbuddy.mjs material.upload --project <项目 ID> --library primary|talking_head|voiceover \
+  --path <本地文件或目录> [--path ...] [--target-directory <库内目录>] --confirm-charge
+```
+
+- 素材在用户电脑上时默认直传：一条命令完成「本地清单 → 服务端复核 → 受理 → 分片直传 → 请求封存 → 等待真实导入终态」，整个过程持续续租；素材在网盘、或直传不可用时改用下面的网盘分享导入。索引仍是独立后续动作，不由上传命令自动提交。
+- `--path` 可重复；目录保留子目录层级，同一目录下重复的相对路径会被本地拒绝。符号链接与非普通文件在本地拒绝；白名单外文件由服务端列为排除项（不传、不计费），非法名称与超过 6 级的目录仍整批拒绝。
+- 未带 `--confirm-charge` 不会发出受理请求。CLI 不预报价：节点封存真实文件后由服务端按导入公式一次核价，与其他导入同价同公式。
+- 一次运行就是一个上传会话：中断、权威拒绝或进程结束时会尽力终止，**不跨运行续传**；重跑是新会话，不复用旧字节与旧令牌。
+- 输出只有上传编号、请求编号、库类型、接受/排除清单、字节、真实终态与计费事实，不含上传令牌、tus 地址或节点路径。uploaded、prepared、submitted 都只是进度，CLI 持续运行到 completed 才返回成功，failed 或 cancelled 返回失败；成功后再读 material.directory 核对入库。
+- 受理门槛与网页相同：同库只有一个在途素材工作、项目有未终态剪辑时拒绝、按库最低余额。
+
 ### 素材导入与索引
 
 ```text
@@ -139,6 +153,7 @@ node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confir
 ```
 
 - 导入输入必须包含真实分享链接、目标 `library_type` 与按需的提取码；链接自带提取码时以链接中的为准。分享内容必须来自 `pan.baidu.com` 的 `/s/` 或 `/e/` 链接，不接受其他站点或伪造链接。
+- 可选的 `target_directory` 指定库内目标目录（已提交且存在；省略表示库根），CLI 自动附带目录合同版本，与直传使用同一套目录规则。
 - 导入完成后读取目标库目录再整理。`prepared` 只表示准备完成，不能称为已导入；上传成功与受理回执也不代表已入库。
 - 索引仅支持 `primary` 与 `talking_head`；`voiceover` 没有索引，CLI 在本地拒绝并说明原因。导入不自动索引。
 - 索引只处理启用且待索引/过期的素材。修改主库目录描述会使相关索引过期：先保存修改，再按新范围索引。
@@ -365,6 +380,7 @@ project.delete --project <项目 ID>
 material.directory --project <项目 ID> --library primary|talking_head|voiceover [--task <任务 ID>]
 material.manage --project <项目 ID> --library primary|talking_head|voiceover --input '{"operations":[...]}'
 material.import-failure.dismiss --project <项目 ID> --library primary|talking_head|voiceover --operation <导入操作 ID>
+material.upload --project <项目 ID> --library primary|talking_head|voiceover --path <本地文件或目录> [--path ...] [--target-directory <库内目录>] [--submission-key <幂等键>] --confirm-charge
 material.import.submit --project <项目 ID> [--submission-key <幂等键>] [--notice-version <提示版本>] --confirm-charge --input '{...}'
 material.index.submit --project <项目 ID> [--submission-key <幂等键>] [--notice-version <提示版本>] --confirm-charge --input '{...}'
 ```
@@ -441,7 +457,7 @@ credits.transactions [--page 1] [--limit 10] [--type purchase|consumption|refund
 - 网盘步骤交给官方 `baidu-drive` Skill；把本地已下载的压缩包交给 CLI。
 - `delivery.inspect` 在写入前预检：加密条目、ZIP64、不支持的压缩方式、路径穿越、绝对路径、越界链接、超限体积一律拒绝。
 - `delivery.extract --package <包> --target <目标目录>`：只解压到不存在的新目录，失败时不留下部分产物。
-- `delivery.install --package <包> --drafts-dir <剪映草稿目录> [--name <草稿目录名>]`：安装完整草稿目录；同名草稿拒绝而不是覆盖，不改写草稿 JSON 或 UUID。
+- `delivery.install --package <包> --drafts-dir <剪映草稿目录> [--name <草稿目录名>]`：把包内每条草稿分别安装为剪映草稿目录，批量包按草稿并排安装、不会折叠成一个剪映无法识别的包壳目录；结果 `drafts` 数组逐条给出 `draft_name`、`installed_path` 与该草稿自身计数。任一草稿重名时整批拒绝（`draft_conflict`）而不是覆盖，也不留下部分安装；`--name` 只对单草稿包有效，多草稿包会返回 `name_requires_single_draft`；不改写草稿 JSON 或 UUID。
 - 结果分三段报告：`extracted`、`installed`、`jianying_recognition`。网盘下载成功、文件安装成功、剪映实际识别成功是三件事，分别如实说明。
 
 ## 8. 禁止

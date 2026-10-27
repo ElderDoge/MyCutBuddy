@@ -90,7 +90,7 @@ node scripts/mycutbuddy.mjs delivery.install --package <压缩包路径> --draft
 
 - `delivery.inspect` 在写入前预检加密条目、ZIP64、不支持的压缩方式、路径穿越、绝对路径、越界链接与超限体积；任一项不合格就停止，不尝试绕过。
 - `delivery.extract` 只解压到不存在的新目录，失败时不留下部分产物；需要先检查内容时使用它。
-- `delivery.install` 安装完整草稿目录，内部先安全解压到临时目录；同名草稿拒绝而不是覆盖，不改写草稿 JSON 或 UUID。
+- `delivery.install` 把包内每条草稿分别安装为剪映草稿目录，内部先安全解压到临时目录；批量包里的多条草稿会并排安装，不要自行再拆包或手工搬目录。安装结果按草稿逐条列出，任一草稿重名即整批拒绝而不是覆盖，也不留下部分安装；`--name` 只对单草稿包有效。不改写草稿 JSON 或 UUID。
 - 草稿必须是**完整目录**（包含草稿内容文件），不是单个文件，也不是压缩包本身。
 - 通常直接使用剪映默认草稿目录，不必每次让用户去设置里找路径：
   - Windows：`%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft`，即 `C:\Users\<用户名>\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft`。
