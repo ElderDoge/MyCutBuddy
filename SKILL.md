@@ -14,7 +14,7 @@ compatibility: 使用 Skill 中的 CLI（Skill 根目录下 `node scripts/mycutb
 |---|---|
 | 连接站点、设备授权、凭据失效 | [账号授权](references/authentication.md) |
 | 积分、充值、推广返利与退款 | [积分](references/billing.md) |
-| 网盘上传分享、草稿下载、解压与剪映安装 | [网盘与草稿](references/baidu-drive-and-drafts.md) |
+| 草稿直接下载、网盘上传分享、解压与剪映安装 | [网盘与草稿](references/baidu-drive-and-drafts.md) |
 | 从素材到草稿的完整流程，每个配置框怎么填 | [剪辑指南](references/editing-guide.md) |
 | 自定义资源预设：语音字幕、固定文字等 | [自定义资源预设](references/custom-presets.md) |
 | 新项目必看：按真实项目归纳的素材库结构、目录描述和配置示例 | [场景示例](references/examples.md) |
@@ -31,7 +31,7 @@ compatibility: 使用 Skill 中的 CLI（Skill 根目录下 `node scripts/mycutb
 2. **素材**：按聊清的素材情况确定目标库，先按「不能接受的素材」核对清单检查一遍（格式、压缩包、文件名、层级、是否放错库），再完成上传、导入和整理。素材在用户电脑上时默认直接上传（见下面的「上传素材」），只有在网盘或本机无法上传时才改用网盘分享导入。主素材库还有未处理视频时按下面的「主素材库的镜头处理」选择镜头类型，再提交处理并索引；人物口播库只索引；语音配音库没有索引。库类型必须显式传入，格式、上限与互斥规则见 CLI 参考。
 3. **风格**：读取 `editing.context`，先看账号里已保存的个人风格预设（含按项目、题材或产品命名的），把可选风格和各自的效果差异用业务语言讲给用户，确认这次用哪一个；用户没有明确偏好时也要先给选项再定，不要直接默默套系统默认风格。确认后以该风格为底，按用户提出的效果决定要改的字段；需要长期保留时另存个人风格。
 4. **配置与提交**：按剪辑指南填写 `public_config`；旁白直接提交，人物口播先 `editing.estimate` 取得令牌再提交。保存 `request_id`、`execution_task_id` 与提交键。
-5. **跟踪与交付**：用 `request.watch`/`task.watch` 跟到真实终态；按任务 artifact 找草稿包，经网盘下载后依次执行 `delivery.inspect`、`delivery.extract`、`delivery.install`，并分别报告解压、安装和剪映识别状态。
+5. **跟踪与交付**：用 `request.watch`/`task.watch` 跟到真实终态；从任务的 `downloads[]` 取每个包的 `download_id`，用 `delivery.download` 直接下载封存草稿包（不必经过网盘），再依次执行 `delivery.inspect`、`delivery.extract`、`delivery.install`，并分别报告下载、解压、安装和剪映识别状态。批量任务逐包下载，不要只取第一个包。
 
 ## 与用户沟通
 
@@ -118,5 +118,5 @@ node scripts/mycutbuddy.mjs material.upload --project <项目 ID> --library prim
 
 - 系统风格只读。背景音乐没有系统默认预设，只有用户自定义的 BGM 预设（经 BGM 素材库上传，当前可能尚未开放）；个人音乐与个人音色的导入、管理当前没有可用入口，只能使用资源目录中已经存在的音乐与音色。
 - 同一素材库的素材工作互斥，素材工作与本项目未终态的剪辑任务双向互斥；可用性由服务端判定。
-- 草稿包会过期；包名、成员与有效期以任务交付事实为准，不能用任务名称猜包。
+- 草稿包会过期（封存 ZIP 与网盘包都是 30 天）；包名、成员与有效期以任务交付事实为准，不能用任务名称猜包。
 - 纯云端 Agent 无法写入用户电脑；无法实际验证剪映识别时必须说明这一限制。

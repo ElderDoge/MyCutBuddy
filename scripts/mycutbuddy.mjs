@@ -559,7 +559,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.4.0";
+var CLI_VERSION = "0.4.1";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
@@ -848,6 +848,72 @@ var creditsCommands = [
   }
 ];
 
+// packages/mycutbuddy-cli/src/core/draft-download.ts
+import { createHash } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { rename, rm } from "node:fs/promises";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+var DOWNLOAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, TUNNEL_PREFIX = "/~!frp/drafts/";
+async function downloadDraftPackage(input) {
+  let downloadId = input.downloadId.trim().toLowerCase();
+  if (!DOWNLOAD_ID_PATTERN.test(downloadId))
+    throw localInputError(
+      "invalid_identifier",
+      "\u4E0B\u8F7D ID \u5FC5\u987B\u662F\u4EFB\u52A1\u53CD\u9988\u91CC\u7684 download_id\uFF08UUID\uFF09\uFF0C\u4E0D\u63A5\u53D7\u8DEF\u5F84\u6216\u94FE\u63A5\u3002"
+    );
+  let url = new URL(`${TUNNEL_PREFIX}${downloadId}`, input.site), partialPath = `${input.targetPath}.part`, response;
+  try {
+    response = await input.fetchImpl(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${input.accessToken}`, accept: "application/zip" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(input.timeoutMs)
+    });
+  } catch (error) {
+    let name = error instanceof Error ? error.name : "Error", timeoutMinutes = Math.round(input.timeoutMs / 6e4);
+    throw transientError(
+      name === "TimeoutError" ? "timeout" : "network_error",
+      `\u4E0B\u8F7D\u672A\u5B8C\u6210\uFF08${timeoutMinutes} \u5206\u949F\u7A97\u53E3\uFF09\uFF1A\u8FDE\u63A5\u4E2D\u65AD\u6216\u8D85\u65F6\uFF0C\u8BF7\u91CD\u8BD5\u3002`,
+      { reason: name }
+    );
+  }
+  if (response.status !== 200) {
+    let text = await response.text().catch(() => ""), serviceCode = null, serviceMessage = null;
+    try {
+      let parsed = JSON.parse(text);
+      typeof parsed.code == "string" && (serviceCode = parsed.code), typeof parsed.error == "string" ? serviceMessage = parsed.error : typeof parsed.message == "string" && (serviceMessage = parsed.message);
+    } catch {
+      serviceCode = null;
+    }
+    let details = { status: response.status, ...serviceCode === null ? {} : { service: { code: serviceCode } } }, message = serviceMessage ?? `\u7AD9\u70B9\u62D2\u7EDD\u4E0B\u8F7D\uFF08HTTP ${response.status}\uFF09\u3002`;
+    throw response.status === 401 ? authenticationError(serviceCode ?? "authentication_required", message, details) : response.status === 429 ? transientError("rate_limited", message, details) : response.status >= 500 ? transientError(serviceCode ?? "server_error", message, details) : businessRejection(serviceCode ?? "download_refused", message, details);
+  }
+  if (!response.body)
+    throw transientError("malformed_response", "\u7AD9\u70B9\u8FD4\u56DE\u4E86\u7A7A\u54CD\u5E94\u4F53\uFF0C\u672A\u5199\u5165\u4EFB\u4F55\u6587\u4EF6\u3002");
+  let declared = Number.parseInt(response.headers.get("content-length") ?? "", 10), hash = createHash("sha256"), bytes = 0, counter = new Transform({
+    transform(chunk, _encoding, callback) {
+      bytes += chunk.length, hash.update(chunk), callback(null, chunk);
+    }
+  });
+  try {
+    await pipeline(Readable.fromWeb(response.body), counter, createWriteStream(partialPath));
+  } catch (error) {
+    throw await rm(partialPath, { force: !0 }), transientError(
+      "download_interrupted",
+      "\u4E0B\u8F7D\u4E2D\u9014\u65AD\u5F00\uFF0C\u672A\u5199\u5165\u4EFB\u4F55\u5B8C\u6574\u6587\u4EF6\uFF0C\u8BF7\u91CD\u8BD5\uFF1B\u82E5\u53CD\u590D\u65AD\u5728\u76F8\u8FD1\u4F4D\u7F6E\uFF0C\u53EF\u6539\u7528\u767E\u5EA6\u7F51\u76D8\u4EA4\u4ED8\u3002",
+      { reason: error instanceof Error ? error.name : "Error", received_bytes: bytes }
+    );
+  }
+  if (Number.isFinite(declared) && declared !== bytes)
+    throw await rm(partialPath, { force: !0 }), transientError(
+      "download_incomplete",
+      `\u4E0B\u8F7D\u4E0D\u5B8C\u6574\uFF08\u6536\u5230 ${bytes} \u5B57\u8282\uFF0C\u5E94\u4E3A ${declared} \u5B57\u8282\uFF09\uFF0C\u672A\u4FDD\u7559\u6587\u4EF6\uFF0C\u8BF7\u91CD\u8BD5\u3002`,
+      { received_bytes: bytes, declared_bytes: declared }
+    );
+  return await rename(partialPath, input.targetPath), { path: input.targetPath, bytes, sha256: hash.digest("hex") };
+}
+
 // packages/mycutbuddy-cli/src/core/service-facts.ts
 var TERMINAL_TASK_STATUSES = {
   completed: !0,
@@ -888,10 +954,10 @@ import { lstatSync as lstatSync2, readdirSync, renameSync as renameSync2, rmSync
 import { basename, join as join2, resolve as resolve2 } from "node:path";
 
 // packages/mycutbuddy-cli/src/local/zip.ts
-import { closeSync, createReadStream, createWriteStream, lstatSync, mkdirSync as mkdirSync2, openSync, readSync, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { closeSync, createReadStream, createWriteStream as createWriteStream2, lstatSync, mkdirSync as mkdirSync2, openSync, readSync, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2, resolve, sep } from "node:path";
-import { Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { Transform as Transform2 } from "node:stream";
+import { pipeline as pipeline2 } from "node:stream/promises";
 import { createInflateRaw } from "node:zlib";
 var LIMITS = {
   entries: 5e4,
@@ -997,7 +1063,7 @@ function resolveEntryPath(root, entryName) {
     });
   return target;
 }
-var DeclaredSizeGuard = class extends Transform {
+var DeclaredSizeGuard = class extends Transform2 {
   constructor(limit) {
     super();
     this.produced = 0;
@@ -1030,8 +1096,8 @@ async function extractEntry(archivePath, entry, targetPath) {
       writeFileSync2(targetPath, Buffer.alloc(0), { mode });
       return;
     }
-    let source = createReadStream(archivePath, { start: dataStart, end: dataEnd - 1 }), destination = createWriteStream(targetPath, { mode }), guard = new DeclaredSizeGuard(entry.uncompressedBytes);
-    entry.compression === COMPRESSION_STORED ? await pipeline(source, guard, destination) : await pipeline(source, createInflateRaw(), guard, destination);
+    let source = createReadStream(archivePath, { start: dataStart, end: dataEnd - 1 }), destination = createWriteStream2(targetPath, { mode }), guard = new DeclaredSizeGuard(entry.uncompressedBytes);
+    entry.compression === COMPRESSION_STORED ? await pipeline2(source, guard, destination) : await pipeline2(source, createInflateRaw(), guard, destination);
   } finally {
     closeSync(descriptor);
   }
@@ -1263,7 +1329,7 @@ var OPTION_DESCRIPTIONS = {
 };
 
 // packages/mycutbuddy-cli/src/commands/delivery.ts
-var PROJECT_HINT = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", PACKAGE_HINT = "\u672C\u673A\u5DF2\u4E0B\u8F7D\u7684\u4EA4\u4ED8\u538B\u7F29\u5305\u8DEF\u5F84\uFF08\u4E0B\u8F7D\u7531\u5B98\u65B9\u767E\u5EA6\u7F51\u76D8 Skill \u5B8C\u6210\uFF09", siteCommands = [
+var PROJECT_HINT = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", PACKAGE_HINT = "\u672C\u673A\u5DF2\u4E0B\u8F7D\u7684\u4EA4\u4ED8\u538B\u7F29\u5305\u8DEF\u5F84\uFF08\u6765\u81EA delivery.download \u7684\u8FD4\u56DE\u503C\uFF0C\u6216\u5B98\u65B9\u767E\u5EA6\u7F51\u76D8 Skill \u4E0B\u8F7D\u7684\u6587\u4EF6\uFF09", DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1e3, siteCommands = [
   {
     id: "delivery.info",
     summary: "\u8BFB\u53D6\u9879\u76EE\u8349\u7A3F\u4EA4\u4ED8\u76EE\u5F55\u7684\u670D\u52A1\u7AEF\u4E8B\u5B9E\uFF08\u5206\u4EAB\u94FE\u63A5\u4E0E\u63D0\u53D6\u7801\uFF09",
@@ -1282,6 +1348,48 @@ var PROJECT_HINT = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\
           delivery === null ? "absent" : hasLink && hasCode ? "available" : "incomplete"
         )
       };
+    }
+  },
+  {
+    id: "delivery.download",
+    summary: "\u76F4\u63A5\u4ECE\u7F51\u7AD9\u4E0B\u8F7D\u4EA4\u4ED8\u538B\u7F29\u5305\uFF08\u4E0D\u7ECF\u767E\u5EA6\u7F51\u76D8\uFF0C\u5199\u5B8C\u5373\u8BA1\u5165\u8BE5\u5305\u4EA4\u4ED8\u6210\u529F\uFF09",
+    usage: "delivery.download --download-id <download_id> --out <\u4FDD\u5B58\u8DEF\u5F84>",
+    options: {
+      "download-id": { type: "string" },
+      out: { type: "string" }
+    },
+    needsCredential: !0,
+    help: {
+      note: "\u53EA\u63A5\u53D7\u4EFB\u52A1\u53CD\u9988\u91CC downloads[].download_id\uFF1B\u7236\u76EE\u5F55\u5FC5\u987B\u5DF2\u5B58\u5728\uFF0C\u4E0B\u8F7D\u4E0D\u5B8C\u6574\u65F6\u4E0D\u4FDD\u7559\u6587\u4EF6\u3002",
+      options: {
+        "download-id": "\u4EFB\u52A1\u53CD\u9988 downloads[].download_id\uFF08\u72B6\u6001\u4E3A available \u6216 completed \u65F6\u624D\u6709\u8BE5\u5B57\u6BB5\uFF09",
+        out: "\u538B\u7F29\u5305\u4FDD\u5B58\u8DEF\u5F84\uFF0C\u4F8B\u5982 ./\u4EA4\u4ED8\u5305.zip"
+      },
+      next: [
+        "node scripts/mycutbuddy.mjs delivery.inspect --package <\u4FDD\u5B58\u8DEF\u5F84>",
+        "node scripts/mycutbuddy.mjs delivery.extract --package <\u4FDD\u5B58\u8DEF\u5F84> --target <\u89E3\u538B\u76EE\u5F55>"
+      ]
+    },
+    async run(context) {
+      let downloadId = requiredStringOption(
+        context.values,
+        "download-id",
+        "\u4EFB\u52A1\u53CD\u9988 downloads[].download_id"
+      ), targetPath = requiredStringOption(context.values, "out", "\u538B\u7F29\u5305\u4FDD\u5B58\u8DEF\u5F84\uFF08\u7236\u76EE\u5F55\u5FC5\u987B\u5DF2\u5B58\u5728\uFF09");
+      return { ...await downloadDraftPackage({
+        site: context.site,
+        accessToken: context.accessToken,
+        downloadId,
+        targetPath,
+        fetchImpl: context.fetchImpl,
+        timeoutMs: DOWNLOAD_TIMEOUT_MS
+      }), stages: {
+        metadata: "available",
+        downloaded: "confirmed",
+        extracted: "not_performed",
+        installed: "not_performed",
+        jianying_recognition: "unverified"
+      } };
     }
   }
 ], localCommands = [
@@ -1336,7 +1444,7 @@ var PROJECT_HINT = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\
 ];
 
 // packages/mycutbuddy-cli/src/core/pending-submissions.ts
-import { createHash, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID } from "node:crypto";
 import { chmodSync as chmodSync2, linkSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync4, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join3 } from "node:path";
 var PENDING_DIRECTORY_MODE = 448, PENDING_FILE_MODE = 384, FORBIDDEN_PERMISSION_BITS2 = 63;
@@ -1360,7 +1468,7 @@ var PendingSubmissionStore = class {
    */
   takeOrCreate(scope) {
     this.ensureDirectory();
-    let digest = createHash("sha256").update(canonicalJson({
+    let digest = createHash2("sha256").update(canonicalJson({
       site: scope.site,
       kind: scope.kind,
       projectId: scope.projectId,

@@ -340,9 +340,10 @@ node scripts/mycutbuddy.mjs delivery.info --project <项目 ID>
 ```
 
 - 余额、状态与积分记录只读。实际费用与退款口径见 [积分与计费](billing.md)。
+- 下载优先用 `delivery.download --download-id <download_id> --out <保存路径>`：直接用 Agent 凭据从节点取封存 ZIP，写完即该包网页交付成功。只接受 `task.get`/`task.list` 里 `downloads[].download_id`（`state` 为 `available` 或 `completed` 时才有），不接受路径或链接；下载不完整时不保留文件，可重试。
 - `delivery.info` 报告项目固定分享入口与提取码，尚未生成时返回空值。任务包名、成员、上传与过期时间由 `task.get`/`task.list` 的交付事实给出；不得用元数据声称已下载或已安装。
-- 下载必须结合任务 `artifact` 的真实 `file_name`、`uploaded_at`、`expires_at` 与成功成员，不自行按任务名称猜另一个包；项目分享包含其他包时只取用户需要的任务包。草稿包只保留一段时间，过期会被清理。
-- 网盘步骤交给官方 `baidu-drive` Skill；本地下载后的压缩包交给 `delivery.inspect`、`delivery.extract`、`delivery.install`。结果分三段报告：`extracted`、`installed`、`jianying_recognition`。网盘下载成功、文件安装成功、剪映实际识别成功是三件事，分别如实说明。
+- 网盘是替代路径（节点离线或用户要求网盘时），交给官方 `baidu-drive` Skill。下载必须结合任务 `artifact` 的真实 `file_name`、`uploaded_at`、`expires_at` 与成功成员，不自行按任务名称猜另一个包；项目分享包含其他包时只取用户需要的任务包。封存 ZIP 与网盘包都只保留 30 天，过期会被清理。
+- 本地压缩包交给 `delivery.inspect`、`delivery.extract`、`delivery.install`。结果分三段报告：`extracted`、`installed`、`jianying_recognition`。下载成功、文件安装成功、剪映实际识别成功是三件事，分别如实说明。
 
 ## 6. 命令清单
 
@@ -439,6 +440,7 @@ task.recreate --project <项目 ID> --task <任务 ID>
 
 ```text
 delivery.info --project <项目 ID>
+delivery.download --download-id <download_id> --out <保存路径>
 delivery.inspect --package <压缩包路径>
 delivery.extract --package <压缩包路径> --target <目标目录>
 delivery.install --package <压缩包路径> --drafts-dir <剪映草稿目录> [--name <草稿目录名>]
@@ -454,7 +456,7 @@ credits.transactions [--page 1] [--limit 10] [--type purchase|consumption|refund
 ## 7. 交付与本地安装
 
 - `delivery.info` 报告项目交付分享入口与提取码；任务包名、成员、上传与过期时间由 `task.get`/`task.list` 的任务交付事实给出。只有元数据时不得声称已下载或已安装。
-- 网盘步骤交给官方 `baidu-drive` Skill；把本地已下载的压缩包交给 CLI。
+- `delivery.download --download-id <download_id> --out <保存路径>` 直接从网站下载封存 ZIP（`stages.downloaded=confirmed` 才代表本机已有文件），父目录必须已存在；网盘替代路径交给官方 `baidu-drive` Skill。
 - `delivery.inspect` 在写入前预检：加密条目、ZIP64、不支持的压缩方式、路径穿越、绝对路径、越界链接、超限体积一律拒绝。
 - `delivery.extract --package <包> --target <目标目录>`：只解压到不存在的新目录，失败时不留下部分产物。
 - `delivery.install --package <包> --drafts-dir <剪映草稿目录> [--name <草稿目录名>]`：把包内每条草稿分别安装为剪映草稿目录，批量包按草稿并排安装、不会折叠成一个剪映无法识别的包壳目录；结果 `drafts` 数组逐条给出 `draft_name`、`installed_path` 与该草稿自身计数。任一草稿重名时整批拒绝（`draft_conflict`）而不是覆盖，也不留下部分安装；`--name` 只对单草稿包有效，多草稿包会返回 `name_requires_single_draft`；不改写草稿 JSON 或 UUID。
