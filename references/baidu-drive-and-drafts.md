@@ -62,7 +62,7 @@ node scripts/mycutbuddy.mjs preset.style.import.save-items --project <项目 ID>
 
 ## 4. 按任务下载草稿包
 
-任务完成后草稿包有两种取得方式：**优先直接从网站下载**（不经网盘，也不依赖用户的网盘账号），网盘分享作为替代。交付信息来自服务端，不要猜测路径：
+草稿包有两种取得方式：**优先直接从网站下载**（不经网盘，也不依赖用户的网盘账号），网盘分享作为替代。批量任务按包交付，每个包封存后即可下载，**不必等任务终态**：任务还在剪辑或网盘上传时，`downloads[]` 里已经可能出现 `state=available` 的包，先下载已可取的包能给用户明显的提前量。交付信息来自服务端，不要猜测路径：
 
 ```text
 node scripts/mycutbuddy.mjs task.get --project <项目 ID> --task <任务 ID>
@@ -73,7 +73,7 @@ node scripts/mycutbuddy.mjs delivery.info --project <项目 ID>
 - `task.get` / `task.list` 的 `downloads[]` 每条对应一个交付包：`artifact_kind`（正式草稿 `jianying_draft` 或测试结果 `test_result`）、`package_index`、`state`、`expires_at`。只有 `state` 为 `available` 或 `completed` 时才有 `download_id`。
 - `state` 的含义：`unsealed` 节点还在封存 ZIP，稍后重查；`offline` 节点当前不在线；`expired` 已过 30 天保留期；`unavailable` 该包不可再取。
 - `delivery.download` 用 Agent 凭据直接从节点下载封存 ZIP，写完即视为该包的网页交付成功（`state` 变为 `completed`，重下会再次计入但不是重复结算）。它只接受 `download_id`，不接受路径或链接；下载不完整时不保留文件，可重试。
-- 批量任务每个包一条 `downloads[]`，按 `package_index` 顺序逐个下载，不要只取第一个包。
+- 批量任务每个包一条 `downloads[]`，按 `package_index` 顺序逐个下载，不要只取第一个包；尚未封存的包是 `unsealed`，任务仍在跑时应当继续轮询 `task.get` 而不是等到终态再看。
 - 注意过期时间：封存 ZIP 与网盘包都只保留 30 天，应尽早保存到用户电脑。
 
 网盘替代路径（`delivery.download` 因节点离线、网络受限或用户要求网盘时）：
