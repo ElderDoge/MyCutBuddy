@@ -1,6 +1,6 @@
 # 百度网盘、样式草稿与本地草稿安装
 
-本文说明如何借助百度网盘 Skill 完成素材、剪映样式草稿的上传与分享，如何按任务下载草稿包，以及在具备本地文件权限时如何把草稿安装到剪映。账号授权见 [authentication.md](./authentication.md)，CLI 命令与业务规则见 [cli.md](./cli.md)，整体工作流见 [../SKILL.md](../SKILL.md)。所有剪搭子业务调用都使用 `node scripts/mycutbuddy.mjs <命令>`，本机需 Node ≥20。
+本文涉及的网盘路径都是**可选项**：素材直传与草稿直接下载都不经网盘，只有「从网盘分享导入素材」和「导入自己的剪映样式/自定义预设」两条路径必须用网盘（见 [../SKILL.md](../SKILL.md) 的「不要求用户拥有百度网盘」）。本文同时说明如何借助百度网盘 Skill 完成素材、剪映样式草稿的上传与分享，如何按任务下载草稿包，以及在具备本地文件权限时如何把草稿安装到剪映。账号授权见 [authentication.md](./authentication.md)，CLI 命令与业务规则见 [cli.md](./cli.md)，整体工作流见 [../SKILL.md](../SKILL.md)。所有剪搭子业务调用都使用 `node scripts/mycutbuddy.mjs <命令>`，本机需 Node ≥20。
 
 ## 1. 引用百度网盘 Skill，不重新实现
 
