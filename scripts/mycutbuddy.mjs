@@ -329,7 +329,7 @@ function redactSecrets(value) {
 }
 
 // packages/mycutbuddy-cli/src/core/routes.ts
-var SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/, PROJECT = "/api/projects/{projectId}", REQUEST = `${PROJECT}/billing-submissions/{requestId}`, SINGLE_TRACK = `${PROJECT}/single-track`, STYLE_IMPORT = `${PROJECT}/subtitle-style-imports/{importId}`, UPLOAD = "/api/materials/{projectId}/uploads", UPLOAD_SESSION = `${UPLOAD}/{uploadId}`, CLI_ROUTES = {
+var SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/, PROJECT = "/api/projects/{projectId}", REQUEST = `${PROJECT}/billing-submissions/{requestId}`, SINGLE_TRACK = `${PROJECT}/single-track`, STYLE_IMPORT = `${PROJECT}/subtitle-style-imports/{importId}`, MUSIC_IMPORT = `${PROJECT}/music-preset-imports/{operationId}`, MUSIC_PRESET = `${PROJECT}/music-presets/{presetId}`, VOICE_PRESET = `${PROJECT}/voice-presets/{presetId}`, UPLOAD = "/api/materials/{projectId}/uploads", UPLOAD_SESSION = `${UPLOAD}/{uploadId}`, CLI_ROUTES = {
   "project.list": { method: "GET", path: "/api/projects" },
   "project.create": { method: "POST", path: "/api/projects" },
   "project.get": { method: "GET", path: PROJECT },
@@ -360,6 +360,23 @@ var SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/, PROJECT = "/api/projects/{projec
   "preset.subtitle.list": { method: "GET", path: `${PROJECT}/subtitle-presets` },
   "preset.subtitle.update": { method: "PATCH", path: `${PROJECT}/subtitle-presets/{presetId}` },
   "preset.subtitle.archive": { method: "DELETE", path: `${PROJECT}/subtitle-presets/{presetId}` },
+  // Personal background music. The import submit route is the only preset path that reaches the
+  // netdisk and the only one that charges on acceptance; the operation read and the idempotent
+  // cancel are separate rows, never reachable through a prefix.
+  "preset.music.list": { method: "GET", path: `${PROJECT}/music-presets` },
+  "preset.music.rename": { method: "PATCH", path: MUSIC_PRESET },
+  "preset.music.archive": { method: "DELETE", path: MUSIC_PRESET },
+  "preset.music.import.list": { method: "GET", path: `${PROJECT}/music-preset-imports` },
+  "preset.music.import.submit": { method: "POST", path: `${PROJECT}/music-preset-imports` },
+  "preset.music.import.get": { method: "GET", path: MUSIC_IMPORT },
+  "preset.music.import.cancel": { method: "POST", path: `${MUSIC_IMPORT}/cancel` },
+  // Personal voice compositions. The list route also returns the project node's real TTS catalogue;
+  // the CLI never stores a voice id of its own.
+  "preset.voice.list": { method: "GET", path: `${PROJECT}/voice-presets` },
+  "preset.voice.get": { method: "GET", path: VOICE_PRESET },
+  "preset.voice.create": { method: "POST", path: `${PROJECT}/voice-presets` },
+  "preset.voice.update": { method: "PATCH", path: VOICE_PRESET },
+  "preset.voice.archive": { method: "DELETE", path: VOICE_PRESET },
   "editing.context": { method: "GET", path: SINGLE_TRACK },
   "editing.estimate": { method: "POST", path: `${PROJECT}/talking-head-estimate` },
   "editing.submit": { method: "POST", path: `${PROJECT}/billing-submissions` },
@@ -559,7 +576,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.4.3";
+var CLI_VERSION = "0.4.4";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
@@ -2843,8 +2860,369 @@ var PROJECT_HINT5 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   }
 ];
 
+// packages/mycutbuddy-cli/src/commands/preset-music.ts
+var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", MUSIC_PRESET_HINT = "\u4E2A\u4EBA\u80CC\u666F\u97F3\u4E50\u9884\u8BBE ID\uFF0C\u6765\u81EA preset.music.list \u7684 presets[].preset_id", OPERATION_HINT = "\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\u64CD\u4F5C ID\uFF0C\u6765\u81EA preset.music.import.submit \u7684 import.operation_id", PERSONAL_MUSIC_IMPORT_NOTICE_VERSION = "personal-music-import-notice.v1", MUSIC_IMPORT_PAYLOAD_FIELDS = ["preset_name", "share_url", "extraction_code"], SUBMISSION_KEY_PATTERN3 = /^[A-Za-z0-9_-]{1,128}$/, IMPORT_FIELDS = [
+  { key: "preset_name", required: !0, type: "string", description: "\u5BFC\u5165\u540E\u53D1\u5E03\u7684\u90A3\u4E00\u6761\u9884\u8BBE\u540D\u79F0\uFF1B\u540C\u540D\u6D3B\u52A8\u9884\u8BBE\u4F1A\u88AB\u62D2\u7EDD\uFF0C\u6700\u591A 80 \u4E2A\u5B57\u7B26\u3002" },
+  { key: "share_url", required: !0, type: "string", description: "\u767E\u5EA6\u7F51\u76D8\u5206\u4EAB\u94FE\u63A5\uFF08pan.baidu.com\uFF09\u3002" },
+  { key: "extraction_code", type: "string", description: "\u63D0\u53D6\u7801\uFF1B\u94FE\u63A5\u81EA\u5E26 pwd \u65F6\u53EF\u7701\u7565\u3002" }
+];
+async function readImportPreview(context, projectId) {
+  try {
+    let response = await context.client.request({
+      route: "preset.music.import.list",
+      params: { projectId }
+    });
+    return response.body !== null && typeof response.body == "object" && !Array.isArray(response.body) ? response.body : null;
+  } catch (error) {
+    return context.warnings.push({
+      code: "charge_preview_unavailable",
+      message: `\u65E0\u6CD5\u8BFB\u53D6\u672C\u6B21\u5BFC\u5165\u524D\u7684\u4F59\u989D\u4E8B\u5B9E\uFF1A${error instanceof Error ? error.message : String(error)}`
+    }), null;
+  }
+}
+var presetMusicCommands = [
+  {
+    id: "preset.music.list",
+    summary: "\u5217\u51FA\u5F53\u524D\u8D26\u53F7\u7684\u4E2A\u4EBA\u80CC\u666F\u97F3\u4E50\u9884\u8BBE\uFF08\u542B\u9501\u5B9A\u72B6\u6001\uFF09",
+    usage: "preset.music.list --project <\u9879\u76EE ID>",
+    options: { ...PROJECT_OPTION },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6);
+      return (await context.client.request({
+        route: "preset.music.list",
+        params: { projectId }
+      })).body;
+    },
+    help: {
+      note: "\u53EA\u8FD4\u56DE\u540D\u79F0\u3001\u7248\u672C\u4E0E\u66F4\u65B0\u65F6\u95F4\uFF0C\u4E0D\u542B\u6587\u4EF6\u76EE\u5F55\u6216\u5BF9\u8C61\u952E\u3002locked=true \u8868\u793A\u6709\u5BFC\u5165\u6B63\u5728\u8FDB\u884C\uFF0C\u6B64\u65F6\u6539\u540D\u4E0E\u5F52\u6863\u90FD\u4F1A\u88AB\u670D\u52A1\u7AEF\u62D2\u7EDD\uFF1Block.project_id \u6307\u51FA\u662F\u54EA\u4E2A\u9879\u76EE\u3002",
+      next: ["preset.music.import.list --project <\u9879\u76EE ID>"]
+    }
+  },
+  {
+    id: "preset.music.rename",
+    summary: "\u91CD\u547D\u540D\u4E2A\u4EBA\u80CC\u666F\u97F3\u4E50\u9884\u8BBE\uFF08\u53EA\u6539\u540D\u79F0\uFF09",
+    usage: "preset.music.rename --project <\u9879\u76EE ID> --music-preset <\u9884\u8BBE ID> --name <\u65B0\u540D\u79F0>",
+    options: { ...PROJECT_OPTION, "music-preset": { type: "string" }, name: { type: "string" } },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), presetId = requiredStringOption(context.values, "music-preset", MUSIC_PRESET_HINT), name = requiredStringOption(context.values, "name", "\u65B0\u7684\u9884\u8BBE\u540D\u79F0\uFF08\u6700\u591A 80 \u4E2A\u5B57\u7B26\uFF09");
+      return (await context.client.request({
+        route: "preset.music.rename",
+        params: { projectId, presetId },
+        body: { name }
+      })).body;
+    },
+    help: {
+      note: "\u9884\u8BBE ID\u3001\u6765\u6E90\u76EE\u5F55\u4E0E\u5DF2\u53D1\u5E03\u8D44\u6E90\u90FD\u4E0D\u53D8\uFF0C\u670D\u52A1\u7AEF\u6309\u65E2\u6709\u89C4\u5219\u628A\u7248\u672C\u52A0\u4E00\u3002\u540C\u540D\u6D3B\u52A8\u9884\u8BBE\u8FD4\u56DE 409\uFF1B\u53E6\u4E00\u4E2A\u9879\u76EE\u6B63\u5728\u5BFC\u5165\u80CC\u666F\u97F3\u4E50\u65F6\u6539\u540D\u4F1A\u88AB\u62D2\u7EDD\u3002",
+      options: { "music-preset": MUSIC_PRESET_HINT }
+    }
+  },
+  {
+    id: "preset.music.archive",
+    summary: "\u5F52\u6863\u4E2A\u4EBA\u80CC\u666F\u97F3\u4E50\u9884\u8BBE\uFF08\u670D\u52A1\u7AEF\u8F6F\u5F52\u6863\uFF0C\u4E0D\u505A\u4E8C\u6B21\u786E\u8BA4\uFF09",
+    usage: "preset.music.archive --project <\u9879\u76EE ID> --music-preset <\u9884\u8BBE ID>",
+    options: { ...PROJECT_OPTION, "music-preset": { type: "string" } },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), presetId = requiredStringOption(context.values, "music-preset", MUSIC_PRESET_HINT);
+      return (await context.client.request({
+        route: "preset.music.archive",
+        params: { projectId, presetId }
+      })).body;
+    },
+    help: {
+      note: "\u5F52\u6863\u540E\u4E0D\u80FD\u518D\u7528\u4E8E\u65B0\u4EFB\u52A1\uFF1B\u672C\u6B21\u5F52\u6863\u91CA\u653E\u7684\u6765\u6E90\u5728\u4E0B\u6B21\u5BFC\u5165\u65F6\u4F1A\u91CD\u65B0\u7B97\u4F5C\u65B0\u589E\u6765\u6E90\u3002\u53E6\u4E00\u4E2A\u9879\u76EE\u6B63\u5728\u5BFC\u5165\u80CC\u666F\u97F3\u4E50\u65F6\u5F52\u6863\u4F1A\u88AB\u62D2\u7EDD\uFF0C\u5DF2\u6709\u4EFB\u52A1\u4E0D\u53D7\u5F71\u54CD\u3002",
+      options: { "music-preset": MUSIC_PRESET_HINT }
+    }
+  },
+  {
+    id: "preset.music.import.list",
+    summary: "\u5217\u51FA\u672C\u9879\u76EE\u7684\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\u8BB0\u5F55\u4E0E\u53D7\u7406\u4F59\u989D\u95E8\u69DB",
+    usage: "preset.music.import.list --project <\u9879\u76EE ID>",
+    options: { ...PROJECT_OPTION },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6);
+      return (await context.client.request({
+        route: "preset.music.import.list",
+        params: { projectId }
+      })).body;
+    },
+    help: {
+      note: "\u8FD4\u56DE\u6700\u8FD1 20 \u6761\u8BB0\u5F55\u3001\u5F53\u524D\u4F59\u989D balance \u4E0E\u53D7\u7406\u95E8\u69DB minimum_balance\u3002active_import_elsewhere \u975E\u7A7A\u8868\u793A\u53E6\u4E00\u4E2A\u9879\u76EE\u6B63\u5728\u5BFC\u5165\uFF1B\u540C\u4E00\u7528\u6237\u540C\u65F6\u53EA\u6709\u4E00\u4E2A\u6D3B\u52A8\u5BFC\u5165\u69FD\u4F4D\u3002",
+      next: ["preset.music.import.submit --project <\u9879\u76EE ID> --confirm-charge --input '{...}'"]
+    }
+  },
+  {
+    id: "preset.music.import.submit",
+    summary: "\u6309\u767E\u5EA6\u7F51\u76D8\u5206\u4EAB\u5BFC\u5165\u80CC\u666F\u97F3\u4E50\u9884\u8BBE\uFF08\u6536\u8D39\uFF0C\u53D7\u7406\u5373\u6263\u8D39\uFF0C\u9700\u8981\u663E\u5F0F\u786E\u8BA4\uFF09",
+    usage: `preset.music.import.submit --project <\u9879\u76EE ID> [--submission-key <\u5E42\u7B49\u952E>] [--notice-version <\u63D0\u793A\u7248\u672C>] --confirm-charge --input '{"preset_name":"...","share_url":"https://pan.baidu.com/s/..."}'`,
+    options: {
+      ...PROJECT_OPTION,
+      ...CHARGE_OPTIONS,
+      ...PAYLOAD_OPTIONS
+    },
+    needsCredential: !0,
+    chargeable: !0,
+    async run(context) {
+      if (context.values["confirm-charge"] !== !0)
+        throw localInputError(
+          "charge_confirmation_required",
+          "\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\u53D7\u7406\u540E\u4F1A\u6263\u8D39\uFF1A\u8BF7\u5148\u4E0E\u7528\u6237\u786E\u8BA4\uFF0C\u518D\u7528 --confirm-charge \u660E\u786E\u786E\u8BA4\u672C\u6B21\u63D0\u4EA4\u3002"
+        );
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), payload = readPayload(context.values, { required: !0, hint: "preset_name \u4E0E share_url" }), presetName = payload.preset_name;
+      if (typeof presetName != "string" || presetName.trim().length === 0)
+        throw localInputError("invalid_payload", "input.preset_name \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u3002");
+      let shareUrl = payload.share_url;
+      if (typeof shareUrl != "string" || shareUrl.trim().length === 0)
+        throw localInputError("invalid_payload", "input.share_url \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u3002");
+      let extractionCode = payload.extraction_code;
+      if (extractionCode !== void 0 && (typeof extractionCode != "string" || extractionCode.trim().length === 0))
+        throw localInputError("invalid_payload", "input.extraction_code \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\uFF1B\u6CA1\u6709\u63D0\u53D6\u7801\u8BF7\u7701\u7565\u3002");
+      let shared = {
+        preset_name: presetName.trim(),
+        share_url: shareUrl,
+        ...typeof extractionCode == "string" ? { extraction_code: extractionCode } : {}
+      }, explicitKey = optionString(context.values, "submission-key");
+      if (explicitKey !== void 0 && !SUBMISSION_KEY_PATTERN3.test(explicitKey))
+        throw localInputError("invalid_arguments", "--submission-key \u53EA\u5141\u8BB8 1..128 \u4F4D\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u6216\u8FDE\u5B57\u7B26\u3002");
+      let ledger = new PendingSubmissionStore(context.store.home), pending = explicitKey === void 0 ? ledger.takeOrCreate({ site: context.site, kind: "personal_music_import", projectId, input: shared }) : { submissionKey: explicitKey, source: "explicit", path: "" }, declaredKey = payload.submission_key;
+      if (declaredKey !== void 0 && declaredKey !== pending.submissionKey)
+        throw localInputError("submission_key_mismatch", "--input \u4E2D\u7684 submission_key \u4E0E --submission-key \u4E0D\u4E00\u81F4\uFF0C\u8BF7\u53EA\u4FDD\u7559\u4E00\u5904\u3002");
+      let explicitNoticeVersion = optionString(context.values, "notice-version"), noticeVersion = explicitNoticeVersion ?? PERSONAL_MUSIC_IMPORT_NOTICE_VERSION, declaredNoticeVersion = payload.notice_version;
+      if (declaredNoticeVersion !== void 0 && declaredNoticeVersion !== noticeVersion)
+        throw localInputError("notice_version_mismatch", "--input \u4E2D\u7684 notice_version \u4E0E --notice-version \u4E0D\u4E00\u81F4\uFF0C\u8BF7\u53EA\u4FDD\u7559\u4E00\u5904\u3002");
+      let unknown = Object.keys(payload).filter((key) => ![
+        ...MUSIC_IMPORT_PAYLOAD_FIELDS,
+        "submission_key",
+        "notice_version"
+      ].includes(key));
+      if (unknown.length > 0)
+        throw localInputError(
+          "invalid_payload",
+          `\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\u8F93\u5165\u53EA\u652F\u6301\uFF1A${[...MUSIC_IMPORT_PAYLOAD_FIELDS, "submission_key", "notice_version"].join("\u3001")}\uFF1B\u591A\u4F59\u5B57\u6BB5\uFF1A${unknown.sort().join("\u3001")}\u3002`
+        );
+      let facts = await readImportPreview(context, projectId);
+      context.progress({
+        event: "charge_preview",
+        kind: "personal_music_import",
+        project_id: projectId,
+        notice_version: noticeVersion,
+        notice_version_source: explicitNoticeVersion === void 0 ? "site_published" : "explicit",
+        submission_key: pending.submissionKey,
+        submission_key_source: pending.source,
+        credit_balance: facts === null ? null : readField(facts, "balance") ?? null,
+        minimum_balance: facts === null ? null : readField(facts, "minimum_balance") ?? null,
+        active_import_elsewhere: facts === null ? null : readField(facts, "active_import_elsewhere") ?? null,
+        input_summary: { preset_name: shared.preset_name, has_extraction_code: "extraction_code" in shared }
+      });
+      let response;
+      try {
+        response = await context.client.request({
+          route: "preset.music.import.submit",
+          params: { projectId },
+          body: {
+            submission_key: pending.submissionKey,
+            notice_version: noticeVersion,
+            ...shared
+          }
+        });
+      } catch (error) {
+        pending.path.length > 0 && (!isCliError(error) || error.kind !== "transient" && error.kind !== "authentication") && ledger.discard(pending.path), rethrowWithIdentity(error, {
+          kind: "personal_music_import",
+          submission_key: pending.submissionKey,
+          submission_key_source: pending.source
+        });
+      }
+      return pending.path.length > 0 && ledger.discard(pending.path), {
+        submission_key: pending.submissionKey,
+        submission_key_source: pending.source,
+        kind: "personal_music_import",
+        replayed: readField(response.body, "replayed") === !0,
+        http_status: response.status,
+        import: readField(response.body, "import")
+      };
+    },
+    help: {
+      note: "\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\u6309\u767E\u5EA6\u7F51\u76D8\u5206\u4EAB\u6267\u884C\uFF0C\u662F\u552F\u4E00\u9700\u8981\u7F51\u76D8\u7684\u9884\u8BBE\u8DEF\u5F84\uFF1B\u53D7\u7406\u5373\u6263\u8D39\uFF0C\u63D0\u4EA4\u7ED9\u8282\u70B9\u524D\u5931\u8D25\u6216\u88AB\u53D6\u6D88\u65F6\uFF0C\u5DF2\u6263\u79EF\u5206\u53EA\u9000\u56DE\u4E00\u6B21\u3002\u8BA1\u8D39\u53E3\u5F84\u7531\u670D\u52A1\u7AEF\u7ED9\u51FA\uFF1AD=\u4E0B\u8F7D\u97F3\u9891\u6570\u3001S=\u65B0\u589E\u6765\u6E90\u6570\u3001C \u6052\u4E3A 0\uFF0C\u53D7\u7406\u9700\u4E0D\u4F4E\u4E8E 1 \u79EF\u5206\u3002\u5206\u4EAB\u91CC\u7684\u97F3\u9891\u7EDF\u4E00\u53D1\u5E03\u4E3A MP3\uFF08\u5408\u6CD5 MP3 \u4E14\u6807\u79F0\u7801\u7387 \u2264192 kbps \u4FDD\u7559\u539F\u5B57\u8282\uFF0C\u5176\u4F59\u8F6C\u7801\uFF09\uFF0C\u540C\u4E00\u9884\u8BBE\u5185\u6309\u53BB\u6269\u5C55\u540D\u7684\u540D\u79F0\u53BB\u91CD\uFF0C\u649E\u540D\u81EA\u52A8\u52A0 (2) \u7B49\u5E8F\u53F7\uFF1B\u4F46 preset_name \u4E0E\u6D3B\u52A8\u9884\u8BBE\u540C\u540D\u4F1A\u5728\u53D7\u7406\u524D\u88AB\u62D2\u7EDD\uFF0C\u8BF7\u6362\u540D\u79F0\u6216\u5148\u5F52\u6863\u65E7\u9884\u8BBE\u3002\u540C\u4E00\u7528\u6237\u540C\u65F6\u53EA\u6709\u4E00\u4E2A\u6D3B\u52A8\u5BFC\u5165\uFF0C\u7EDF\u4E00 12 \u5C0F\u65F6\u622A\u6B62\u3002",
+      options: {
+        "notice-version": `\u672C\u6B21\u786E\u8BA4\u7684\u8BA1\u8D39\u63D0\u793A\u7248\u672C\uFF1B\u7701\u7565\u65F6\u4F7F\u7528\u7AD9\u70B9\u5F53\u524D\u516C\u5E03\u7684\u7248\u672C\uFF08${PERSONAL_MUSIC_IMPORT_NOTICE_VERSION}\uFF09\uFF0C\u7AD9\u70B9\u66F4\u65B0\u540E\u4F1A\u4EE5\u300C\u8BA1\u8D39\u63D0\u793A\u5DF2\u66F4\u65B0\u300D\u62D2\u7EDD\u3002`,
+        "submission-key": "\u672C\u6B21\u5BFC\u5165\u7684\u5E42\u7B49\u952E\uFF1B\u7701\u7565\u65F6\u81EA\u52A8\u751F\u6210\u5E76\u5728\u672C\u673A\u4FDD\u7559\u5F85\u7528\u8BB0\u5F55\u3002"
+      },
+      fields: IMPORT_FIELDS,
+      example: {
+        preset_name: "\u8F7B\u5FEB\u7684\u5F00\u573A\u97F3\u4E50",
+        share_url: "https://pan.baidu.com/s/...",
+        extraction_code: "abcd"
+      },
+      next: [
+        "preset.music.import.get --project <\u9879\u76EE ID> --operation <\u5BFC\u5165 ID>",
+        "preset.music.list --project <\u9879\u76EE ID>"
+      ]
+    }
+  },
+  {
+    id: "preset.music.import.get",
+    summary: "\u67E5\u8BE2\u5355\u6761\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\uFF08\u542B\u8BA1\u8D39\u3001\u9000\u6B3E\u4E0E\u6E05\u7406\u4E8B\u5B9E\uFF09",
+    usage: "preset.music.import.get --project <\u9879\u76EE ID> --operation <\u5BFC\u5165 ID>",
+    options: { ...PROJECT_OPTION, operation: { type: "string" } },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), operationId = requiredStringOption(context.values, "operation", OPERATION_HINT);
+      return (await context.client.request({
+        route: "preset.music.import.get",
+        params: { projectId, operationId }
+      })).body;
+    },
+    help: {
+      note: "status \u662F\u670D\u52A1\u7AEF\u9636\u6BB5\uFF0C\u4E0D\u662F\u8BA2\u9605\u8FDB\u5EA6\uFF1Acompleted \u624D\u4EE3\u8868\u9884\u8BBE\u5DF2\u53D1\u5E03\uFF0C\u5E76\u5E26 preset_sync_pending \u8BF4\u660E\u8282\u70B9\u662F\u5426\u8FD8\u6CA1\u63A5\u53D7\u540C\u6B65\u3002credit_cost/credit_status/refunded_credits/settlement_status \u662F\u670D\u52A1\u7AEF\u8D26\u672C\u4E8B\u5B9E\u3002",
+      options: { operation: OPERATION_HINT }
+    }
+  },
+  {
+    id: "preset.music.import.cancel",
+    summary: "\u53D6\u6D88\u80CC\u666F\u97F3\u4E50\u5BFC\u5165\uFF08\u5E42\u7B49\uFF1B\u5DF2\u6263\u79EF\u5206\u53EA\u9000\u4E00\u6B21\uFF09",
+    usage: "preset.music.import.cancel --project <\u9879\u76EE ID> --operation <\u5BFC\u5165 ID>",
+    options: { ...PROJECT_OPTION, operation: { type: "string" } },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), operationId = requiredStringOption(context.values, "operation", OPERATION_HINT);
+      return (await context.client.request({
+        route: "preset.music.import.cancel",
+        params: { projectId, operationId }
+      })).body;
+    },
+    help: {
+      note: "\u53D6\u6D88\u662F\u5E42\u7B49\u7684\uFF1A\u5DF2\u7ECF\u6263\u8D39\u7684\u5BFC\u5165\u53EA\u9000\u56DE\u4E00\u6B21\uFF0C\u5C1A\u672A\u6263\u8D39\u7684\u5BFC\u5165\u76F4\u63A5\u505C\u6B62\u51C6\u5907\u3002\u8282\u70B9\u786E\u8BA4\u6E05\u7406\u524D\u72B6\u6001\u4E3A cancelling\uFF0C\u6B64\u65F6\u6D3B\u52A8\u5BFC\u5165\u69FD\u4F4D\u4ECD\u88AB\u5360\u7528\uFF1B\u5DF2\u8FDB\u5165\u53D1\u5E03\u7684\u5BFC\u5165\u82E5\u5148\u5B8C\u6210\u53D1\u5E03\uFF0C\u53D6\u6D88\u4F1A\u8FD4\u56DE\u7EC8\u6001\u800C\u4E0D\u64A4\u9500\u3002",
+      options: { operation: OPERATION_HINT },
+      next: ["preset.music.import.get --project <\u9879\u76EE ID> --operation <\u5BFC\u5165 ID>"]
+    }
+  }
+];
+
+// packages/mycutbuddy-cli/src/commands/preset-voice.ts
+var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", VOICE_PRESET_HINT = "\u4E2A\u4EBA\u914D\u97F3\u97F3\u8272\u9884\u8BBE ID\uFF0C\u6765\u81EA preset.voice.list \u7684 presets[].preset_id", DEFINITION_FIELDS = [
+  { key: "definition", required: !0, type: "object", description: "\u97F3\u8272\u7EC4\u5408\u5B9A\u4E49\uFF0C\u53EA\u542B tts_provider \u4E0E voices \u4E24\u4E2A\u5B57\u6BB5\u3002" },
+  { key: "definition.tts_provider", required: !0, type: "enum", values: ["doubao_tts_1_0"], description: "\u56FA\u5B9A\u4E3A doubao_tts_1_0\uFF0C\u4E0D\u6309\u6210\u5458\u5206\u522B\u6307\u5B9A\u3002" },
+  { key: "definition.voices", required: !0, type: "array", description: "\u81F3\u5C11\u4E00\u4E2A\u6210\u5458\uFF0C\u987A\u5E8F\u5C31\u662F\u4FDD\u5B58\u540E\u7684\u9009\u62E9\u987A\u5E8F\u3002" },
+  { key: "definition.voices[].voice_type", required: !0, type: "string", description: "\u97F3\u8272 ID\uFF0C\u5FC5\u987B\u53D6\u81EA preset.voice.list \u8FD4\u56DE\u7684 voices[].id\uFF08\u5F53\u524D\u9879\u76EE\u8282\u70B9\u7684\u771F\u5B9E TTS \u76EE\u5F55\uFF09\u3002" },
+  { key: "definition.voices[].weight", required: !0, type: "integer", description: "\u6B63\u6574\u6570\u6743\u91CD\uFF1B\u6210\u5458\u4E0D\u80FD\u91CD\u590D\u3002" }
+], presetVoiceCommands = [
+  {
+    id: "preset.voice.list",
+    summary: "\u5217\u51FA\u97F3\u8272\u7EC4\u5408\uFF0C\u5E76\u8FD4\u56DE\u5F53\u524D\u9879\u76EE\u8282\u70B9\u7684\u771F\u5B9E TTS \u97F3\u8272\u76EE\u5F55",
+    usage: "preset.voice.list --project <\u9879\u76EE ID>",
+    options: { ...PROJECT_OPTION },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7);
+      return (await context.client.request({
+        route: "preset.voice.list",
+        params: { projectId }
+      })).body;
+    },
+    help: {
+      note: "voices \u662F\u5F53\u524D\u9879\u76EE\u8282\u70B9\u771F\u5B9E\u53EF\u7528\u7684\u76EE\u5F55\uFF08id \u4E0E name\uFF09\uFF0Ctts_provider \u662F\u8FD9\u4EFD\u5B9A\u4E49\u552F\u4E00\u63A5\u53D7\u7684\u63D0\u4F9B\u65B9\u3002\u65B0\u5EFA\u6216\u7F16\u8F91\u524D\u5FC5\u987B\u5148\u8BFB\u8FD9\u4EFD\u76EE\u5F55\uFF1A\u76EE\u5F55\u4E4B\u5916\u7684 voice_type \u4F1A\u88AB\u670D\u52A1\u7AEF\u62D2\u7EDD\uFF0C\u540D\u79F0\u4E0D\u80FD\u5F53 ID \u7528\u3002presets \u540C\u65F6\u5305\u542B\u7CFB\u7EDF\u9884\u8BBE\uFF08scope=system\uFF0C\u53EA\u8BFB\uFF09\u4E0E\u4E2A\u4EBA\u9884\u8BBE\u3002",
+      next: [`preset.voice.create --project <\u9879\u76EE ID> --input '{"name":"...","definition":{...}}'`]
+    }
+  },
+  {
+    id: "preset.voice.get",
+    summary: "\u67E5\u8BE2\u5355\u4E2A\u97F3\u8272\u7EC4\u5408\u7684\u5B8C\u6574\u5B9A\u4E49",
+    usage: "preset.voice.get --project <\u9879\u76EE ID> --voice-preset <\u9884\u8BBE ID>",
+    options: { ...PROJECT_OPTION, "voice-preset": { type: "string" } },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), presetId = requiredStringOption(context.values, "voice-preset", VOICE_PRESET_HINT);
+      return (await context.client.request({
+        route: "preset.voice.get",
+        params: { projectId, presetId }
+      })).body;
+    },
+    help: {
+      note: "\u8FD4\u56DE definition \u7684\u4FDD\u5B58\u539F\u6837\uFF0C\u6210\u5458\u987A\u5E8F\u4E0E\u6743\u91CD\u90FD\u4E0D\u91CD\u6392\u3002\u7F16\u8F91\u524D\u5148\u8BFB\u53D6\uFF0C\u63D0\u4EA4\u65F6\u4FDD\u7559\u7528\u6237\u8981\u4FDD\u7559\u7684\u6210\u5458\u3002",
+      options: { "voice-preset": VOICE_PRESET_HINT }
+    }
+  },
+  {
+    id: "preset.voice.create",
+    summary: "\u65B0\u5EFA\u4E2A\u4EBA\u914D\u97F3\u97F3\u8272\u9884\u8BBE\uFF08\u540C\u540D\u9700\u8981\u663E\u5F0F\u8986\u76D6\uFF09",
+    usage: `preset.voice.create --project <\u9879\u76EE ID> --input '{"name":"...","definition":{"tts_provider":"doubao_tts_1_0","voices":[{"voice_type":"...","weight":1}]}}'`,
+    options: { ...PROJECT_OPTION, ...PAYLOAD_OPTIONS },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), payload = readPayload(context.values, { required: !0, hint: "name \u4E0E definition" });
+      return (await context.client.request({
+        route: "preset.voice.create",
+        params: { projectId },
+        body: payload
+      })).body;
+    },
+    help: {
+      note: '\u670D\u52A1\u7AEF\u53EA\u63A5\u53D7 name\u3001definition \u4E0E\u53EF\u9009 overwrite\uFF0C\u9884\u8BBE\u5F52\u5C5E\u4E0E\u7C7B\u578B\u7531\u670D\u52A1\u7AEF\u51B3\u5B9A\u3002\u540C\u540D\u4E2A\u4EBA\u9884\u8BBE\u5DF2\u5B58\u5728\u65F6\u8FD4\u56DE 409\uFF1B\u7528\u6237\u786E\u8BA4\u8986\u76D6\u540E\uFF0C\u5728\u90A3\u6B21\u8F93\u5165\u91CC\u5E26 "overwrite":true\u3002',
+      fields: [{ key: "name", required: !0, type: "string", description: "\u9884\u8BBE\u540D\u79F0\uFF0C\u6700\u591A 80 \u4E2A\u5B57\u7B26\u3002" }, ...DEFINITION_FIELDS, { key: "overwrite", type: "boolean", description: "\u540C\u540D\u4E2A\u4EBA\u9884\u8BBE\u8986\u76D6\u786E\u8BA4\uFF1B\u9ED8\u8BA4\u4E0D\u8986\u76D6\u3002" }],
+      example: {
+        name: "\u6E29\u67D4\u5973\u58F0",
+        definition: { tts_provider: "doubao_tts_1_0", voices: [{ voice_type: "zh_female_...", weight: 2 }, { voice_type: "zh_male_...", weight: 1 }] }
+      },
+      next: ["preset.voice.list --project <\u9879\u76EE ID>"]
+    }
+  },
+  {
+    id: "preset.voice.update",
+    summary: "\u7F16\u8F91\u4E2A\u4EBA\u914D\u97F3\u97F3\u8272\u9884\u8BBE\uFF08\u540D\u79F0\u4E0E\u5B9A\u4E49\u4E00\u8D77\u63D0\u4EA4\uFF09",
+    usage: `preset.voice.update --project <\u9879\u76EE ID> --voice-preset <\u9884\u8BBE ID> --input '{"name":"...","definition":{"tts_provider":"doubao_tts_1_0","voices":[...]}}'`,
+    options: { ...PROJECT_OPTION, "voice-preset": { type: "string" }, ...PAYLOAD_OPTIONS },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), presetId = requiredStringOption(context.values, "voice-preset", VOICE_PRESET_HINT), payload = readPayload(context.values, { required: !0, hint: "name \u4E0E definition" });
+      return (await context.client.request({
+        route: "preset.voice.update",
+        params: { projectId, presetId },
+        body: payload
+      })).body;
+    },
+    help: {
+      note: "\u53EA\u63A5\u53D7 name \u4E0E definition\uFF0C\u4E0D\u63A5\u53D7 overwrite\u3002\u5148 preset.voice.get \u8BFB\u53D6\u539F\u5B9A\u4E49\uFF0C\u518D\u63D0\u4EA4\u5B8C\u6574\u7684\u65B0\u540D\u79F0\u4E0E\u65B0\u6210\u5458\uFF1B\u6539\u540D\u649E\u4E0A\u53E6\u4E00\u4E2A\u9884\u8BBE\u76F4\u63A5\u8FD4\u56DE 409\u3002\u7CFB\u7EDF\u9884\u8BBE\u53EA\u8BFB\uFF08403\uFF09\u3002",
+      options: { "voice-preset": VOICE_PRESET_HINT },
+      fields: [{ key: "name", required: !0, type: "string", description: "\u9884\u8BBE\u540D\u79F0\uFF0C\u6700\u591A 80 \u4E2A\u5B57\u7B26\u3002" }, ...DEFINITION_FIELDS],
+      next: ["preset.voice.get --project <\u9879\u76EE ID> --voice-preset <\u9884\u8BBE ID>"]
+    }
+  },
+  {
+    id: "preset.voice.archive",
+    summary: "\u5220\u9664\u4E2A\u4EBA\u914D\u97F3\u97F3\u8272\u9884\u8BBE\uFF08\u670D\u52A1\u7AEF\u5F52\u6863\uFF0C\u4E0D\u505A\u4E8C\u6B21\u786E\u8BA4\uFF09",
+    usage: "preset.voice.archive --project <\u9879\u76EE ID> --voice-preset <\u9884\u8BBE ID>",
+    options: { ...PROJECT_OPTION, "voice-preset": { type: "string" } },
+    needsCredential: !0,
+    chargeable: !1,
+    async run(context) {
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), presetId = requiredStringOption(context.values, "voice-preset", VOICE_PRESET_HINT);
+      return (await context.client.request({
+        route: "preset.voice.archive",
+        params: { projectId, presetId }
+      })).body;
+    },
+    help: {
+      note: "\u53EA\u5F52\u6863\u5F53\u524D\u8D26\u53F7\u7684\u4E2A\u4EBA\u9884\u8BBE\uFF1B\u7CFB\u7EDF\u9884\u8BBE\u53EA\u8BFB\uFF08403\uFF09\uFF0C\u5DF2\u5F52\u6863\u7684\u9884\u8BBE\u518D\u5220\u9664\u8FD4\u56DE 404\u3002\u5DF2\u6709\u4EFB\u52A1\u4E0D\u53D7\u5F71\u54CD\u3002",
+      options: { "voice-preset": VOICE_PRESET_HINT }
+    }
+  }
+];
+
 // packages/mycutbuddy-cli/src/commands/project.ts
-var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", projectCommands = [
+var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", projectCommands = [
   {
     id: "project.list",
     summary: "\u5217\u51FA\u5F53\u524D\u8D26\u53F7\u7684\u9879\u76EE",
@@ -2876,7 +3254,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8);
       return (await context.client.request({ route: "project.get", params: { projectId } })).body;
     }
   },
@@ -2888,7 +3266,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6), name = requiredStringOption(context.values, "name", "\u65B0\u7684\u9879\u76EE\u540D\u79F0");
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), name = requiredStringOption(context.values, "name", "\u65B0\u7684\u9879\u76EE\u540D\u79F0");
       return (await context.client.request({ route: "project.rename", params: { projectId }, body: { name } })).body;
     }
   },
@@ -2900,7 +3278,7 @@ var PROJECT_HINT6 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT6);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8);
       return (await context.client.request({ route: "project.delete", params: { projectId } })).body;
     }
   }
@@ -2974,7 +3352,7 @@ function nextStepFor(stage, projection) {
 }
 
 // packages/mycutbuddy-cli/src/commands/request.ts
-var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", REQUEST_HINT = "\u8BA1\u8D39\u8BF7\u6C42 ID\uFF0C\u6765\u81EA\u4EFB\u610F\u6536\u8D39\u63D0\u4EA4\u547D\u4EE4\u8FD4\u56DE\u7684 request_id", REQUEST_TERMINAL_STATES = {
+var PROJECT_HINT9 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", REQUEST_HINT = "\u8BA1\u8D39\u8BF7\u6C42 ID\uFF0C\u6765\u81EA\u4EFB\u610F\u6536\u8D39\u63D0\u4EA4\u547D\u4EE4\u8FD4\u56DE\u7684 request_id", REQUEST_TERMINAL_STATES = {
   failed: !0,
   cancelled: !0,
   submitted: !0
@@ -3100,7 +3478,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), requestId = requiredStringOption(context.values, "request", REQUEST_HINT), response = await context.client.request({
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT9), requestId = requiredStringOption(context.values, "request", REQUEST_HINT), response = await context.client.request({
         route: "request.cancel",
         params: { projectId, requestId }
       }), state = readStringField(response.body, "state");
@@ -3118,7 +3496,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT9), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
       return (await context.client.request({
         route: "request.recreate",
         params: { projectId, requestId }
@@ -3127,7 +3505,7 @@ var PROJECT_HINT7 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   }
 ];
 async function readRequest(context) {
-  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT7), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
+  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT9), requestId = requiredStringOption(context.values, "request", REQUEST_HINT);
   return (await context.client.request({
     route: "request.get",
     params: { projectId, requestId }
@@ -3139,7 +3517,7 @@ function delaySeconds2(seconds) {
 }
 
 // packages/mycutbuddy-cli/src/commands/task.ts
-var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", TASK_HINT = "\u4EFB\u52A1 ID\uFF0C\u6765\u81EA task.list \u6216 editing.submit \u8FD4\u56DE\u7684 execution_task_id", taskCommands = [
+var PROJECT_HINT10 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4\u56DE\u503C", TASK_HINT = "\u4EFB\u52A1 ID\uFF0C\u6765\u81EA task.list \u6216 editing.submit \u8FD4\u56DE\u7684 execution_task_id", taskCommands = [
   {
     id: "task.list",
     summary: "\u5206\u9875\u5217\u51FA\u5355\u8F68\u526A\u8F91\u4EFB\u52A1\u4E0E\u8BA1\u8D39\u8BF7\u6C42",
@@ -3153,7 +3531,7 @@ var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), page = optionInteger(context.values, "page", { fallback: 1, minimum: 1, maximum: 1e5 }), pageSize = optionPageSize(context.values);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT10), page = optionInteger(context.values, "page", { fallback: 1, minimum: 1, maximum: 1e5 }), pageSize = optionPageSize(context.values);
       return (await context.client.request({
         route: "task.list",
         params: { projectId },
@@ -3254,7 +3632,7 @@ var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT10), taskId = requiredStringOption(context.values, "task", TASK_HINT);
       return (await context.client.request({
         route: "task.cancel",
         params: { projectId, taskId },
@@ -3270,7 +3648,7 @@ var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT10), taskId = requiredStringOption(context.values, "task", TASK_HINT);
       return (await context.client.request({
         route: "task.delete",
         params: { projectId, taskId },
@@ -3286,7 +3664,7 @@ var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
     needsCredential: !0,
     chargeable: !1,
     async run(context) {
-      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+      let projectId = requiredStringOption(context.values, "project", PROJECT_HINT10), taskId = requiredStringOption(context.values, "task", TASK_HINT);
       return (await context.client.request({
         route: "task.recreate",
         params: { projectId, taskId }
@@ -3295,7 +3673,7 @@ var PROJECT_HINT8 = "\u9879\u76EE ID\uFF0C\u6765\u81EA project.list \u7684\u8FD4
   }
 ];
 async function readTask(context) {
-  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT8), taskId = requiredStringOption(context.values, "task", TASK_HINT);
+  let projectId = requiredStringOption(context.values, "project", PROJECT_HINT10), taskId = requiredStringOption(context.values, "task", TASK_HINT);
   return context.client.request({ route: "task.get", params: { projectId, taskId } });
 }
 function delaySeconds3(seconds) {
@@ -3355,6 +3733,8 @@ var COMMAND_GROUPS = ["general", "auth", "project", "material", "preset", "editi
   ...projectCommands,
   ...materialCommands,
   ...presetCommands,
+  ...presetMusicCommands,
+  ...presetVoiceCommands,
   ...editingCommands,
   ...requestCommands,
   ...taskCommands,

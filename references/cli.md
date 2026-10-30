@@ -63,9 +63,9 @@ node scripts/mycutbuddy.mjs auth.logout [--site <站点地址>]
 
 ## 4. 收费提交
 
-三个可计费入口 `editing.submit`、`material.import.submit`、`material.index.submit` 必须带 `--confirm-charge`；缺少时 CLI 在本地拒绝（退出码 2），不会发请求。CLI 不判断用户是否同意，授权范围由你与用户商议；可以与用户一次性约定持续授权，之后直接执行，不必每次重新征求同意。
+四个可计费入口 `editing.submit`、`material.import.submit`、`material.index.submit`、`preset.music.import.submit` 必须带 `--confirm-charge`；缺少时 CLI 在本地拒绝（退出码 2），不会发请求。CLI 不判断用户是否同意，授权范围由你与用户商议；可以与用户一次性约定持续授权，之后直接执行，不必每次重新征求同意。
 
-- `--notice-version`：可以省略，CLI 会自动读取当前版本；显式传入仍优先。
+- `--notice-version`：可以省略，CLI 会自动读取当前版本；显式传入仍优先。`preset.music.import.submit` 的提示版本不来自服务端读取，省略时使用站点当前公布的版本，站点更新后会以「计费提示已更新」拒绝。
 - `--submission-key`：可以省略，CLI 会生成并在发送前写入本机待用记录。超时或进程中断后，用相同输入重试会自动复用同一个键；显式传入的键始终优先。
 - 发送前 CLI 向标准错误写一条 `charge_preview`，包含余额、已知报价与本次提交键。标准输出仍只有最终信封。
 - `--input '<json>'`（或 `--input-file <路径>` / `--input-file -`）：与网页工作台相同的业务字段。字段结构以 `help <命令>` 为准；口播估算令牌必须来自 `editing.estimate` 的真实返回值，不能自签。
@@ -236,7 +236,7 @@ node scripts/mycutbuddy.mjs preset.style.archive --project <项目 ID> --style <
 - 风格保存字段：`name`、`description`、`tags`、`public_config`、`style_category`；旁白可带 `narration_audio_source=tts|upload`，口播可带 `use_primary_overlay`。创建还可带 `source_preset_id` 与 `overwrite`；覆盖已有名称前需取得用户同意。更新先读取并保留原配置，提交要保存的完整风格。
 - 系统风格只读；需要保留改动时另存个人风格。临时任务调整不自动覆盖已保存预设。归档个人风格不删除已有任务。
 - 常用字段映射：`tts_voice_name`/`tts_voice_preset_id` 二选一；音乐 `background_music_path`；背景 `background_config`；特效 `ai_effect_preset_set_id`；音效 `ai_sound_effect_preset_set_id`；语音字幕 `dialogue_subtitle_style`；固定文字 `global_subtitle_style_0` 至 `global_subtitle_style_4`。相关 enable 开关与条件同时按元数据处理，不给停用功能塞入任意资源。
-- 个人音乐导入与音色组合编辑目前没有可用入口。
+- 个人音乐导入与配音音色组合见下面的「个人音乐与配音音色预设」；二者都不改已有任务，也不会自动套用到新任务。
 
 ### 用户文字样式
 
@@ -258,6 +258,29 @@ node scripts/mycutbuddy.mjs preset.subtitle.archive --project <项目 ID> --subt
 - 选择后再次读取导入详情，向用户展示当前草稿的 `items`（`ordinal`、`text`、`font_supported`、`summary`、`definition` 等）；`save-items` 使用返回的 `ordinal`，不按展示次序重新编号。
 - 空名称不保存；名称不超过 80 字符、描述不超过 500 字符。返回的 `outcomes` 要逐项检查 `saved_preset_id` 或 `error`，不因整体成功就宣布全部保存。同名覆盖按已确认范围带 `overwrite`。
 - `preset.style.import.delete` 只软删终态导入记录，不删除已保存预设。`preset.subtitle.update` 只改名称与描述，不直接提交修改样式定义。保存后重读 `editing.context` 的资源目录，从实际出现的资源身份配置字幕/固定文字，不把名称或未经核对的 ID 直接猜成参数值。
+
+### 个人音乐与配音音色预设
+
+```text
+node scripts/mycutbuddy.mjs preset.music.list --project <项目 ID>
+node scripts/mycutbuddy.mjs preset.music.rename --project <项目 ID> --music-preset <预设 ID> --name <新名称>
+node scripts/mycutbuddy.mjs preset.music.archive --project <项目 ID> --music-preset <预设 ID>
+node scripts/mycutbuddy.mjs preset.music.import.list --project <项目 ID>
+node scripts/mycutbuddy.mjs preset.music.import.submit --project <项目 ID> [--submission-key <幂等键>] [--notice-version <提示版本>] --confirm-charge --input '{"preset_name":"...","share_url":"https://pan.baidu.com/s/...","extraction_code":"..."}'
+node scripts/mycutbuddy.mjs preset.music.import.get --project <项目 ID> --operation <导入 ID>
+node scripts/mycutbuddy.mjs preset.music.import.cancel --project <项目 ID> --operation <导入 ID>
+node scripts/mycutbuddy.mjs preset.voice.list --project <项目 ID>
+node scripts/mycutbuddy.mjs preset.voice.get --project <项目 ID> --voice-preset <预设 ID>
+node scripts/mycutbuddy.mjs preset.voice.create --project <项目 ID> --input '{"name":"...","definition":{...}}'
+node scripts/mycutbuddy.mjs preset.voice.update --project <项目 ID> --voice-preset <预设 ID> --input '{"name":"...","definition":{...}}'
+node scripts/mycutbuddy.mjs preset.voice.archive --project <项目 ID> --voice-preset <预设 ID>
+```
+
+- 背景音乐导入是**唯一需要网盘的预设路径**：来源只能是百度网盘分享，受理即扣费（受理门槛 ≥1 积分），已扣费后提交前失败或取消只退一次；一次导入产出单条同名预设，同一用户同时只有一个活动导入、统一 12 小时截止。音频统一发布 MP3（合法且标称码率 ≤192 kbps 保留原字节，其余转码），同一预设内按去扩展名的名称去重，撞名自动加 ` (2)` 等序号。费用口径与流程见 [自定义资源预设](custom-presets.md) 第 5 节，积分口径见 [积分与计费](billing.md)。
+- `preset_name` 与活动预设同名会在受理前被拒绝（409）；导入期间（含取消中）改名与归档都会被拒绝。`--notice-version` 省略时使用站点当前公布的版本；站点更新后会以「计费提示已更新」拒绝，此时按站点提示重新确认。`--submission-key` 省略时自动生成并在本机保留待用记录，丢响应后用相同输入重放即可复用同一次导入。
+- `preset.music.import.get` 的 `status` 依次是 `preparing`、`prepared`、`publishing`，终态 `completed`、`failed`、`cancelled`；取消后停在 `cancelling` 直至节点确认清理。只有 `completed` 代表预设已发布，`preset_sync_pending=true` 表示节点尚未接受同步；`credit_cost`、`credit_status`、`refunded_credits`、`settlement_status` 是账本事实。
+- 音色组合的 `definition` 只能是 `{tts_provider:"doubao_tts_1_0", voices:[{voice_type, weight}]}`；`voice_type` 必须取自 `preset.voice.list` 返回的 `voices[].id`（当前项目节点真实目录），`weight` 为正整数、成员不可重复。目录之外、显示名当 ID、空目录都会被服务端拒绝，不要编造音色 ID。
+- `preset.voice.create` 只接受 `name`、`definition` 与可选 `overwrite`（同名 409，用户确认覆盖后才带）；`preset.voice.update` 只接受 `name` 与 `definition`，先读取原定义再提交完整成员。系统预设只读（403）。旁白里用 `tts_voice_preset_id` 引用这份组合，或直接用 `tts_voice_name` 选单个音色。
 
 ### 旁白
 
@@ -403,6 +426,18 @@ preset.style.import.save-items --project <项目 ID> --import <导入 ID> --inpu
 preset.subtitle.list --project <项目 ID> --type dialogue_subtitle_style|global_subtitle_style
 preset.subtitle.update --project <项目 ID> --subtitle-preset <预设 ID> --input '{"name":"..."}'
 preset.subtitle.archive --project <项目 ID> --subtitle-preset <预设 ID>
+preset.music.list --project <项目 ID>
+preset.music.rename --project <项目 ID> --music-preset <预设 ID> --name <新名称>
+preset.music.archive --project <项目 ID> --music-preset <预设 ID>
+preset.music.import.list --project <项目 ID>
+preset.music.import.submit --project <项目 ID> [--submission-key <幂等键>] [--notice-version <提示版本>] --confirm-charge --input '{"preset_name":"...","share_url":"https://pan.baidu.com/s/..."}'
+preset.music.import.get --project <项目 ID> --operation <导入 ID>
+preset.music.import.cancel --project <项目 ID> --operation <导入 ID>
+preset.voice.list --project <项目 ID>
+preset.voice.get --project <项目 ID> --voice-preset <预设 ID>
+preset.voice.create --project <项目 ID> --input '{"name":"...","definition":{...}}'
+preset.voice.update --project <项目 ID> --voice-preset <预设 ID> --input '{"name":"...","definition":{...}}'
+preset.voice.archive --project <项目 ID> --voice-preset <预设 ID>
 ```
 
 `editing`

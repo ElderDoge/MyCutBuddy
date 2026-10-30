@@ -8,7 +8,8 @@
 |---|---|---|
 | 语音字幕样式 | `dialogue_subtitle_style` | 剪映草稿导入，本文 |
 | 固定文字样式 | `enable_global_subtitle=true` 后用于 `global_subtitle_style_0` 至 `_4` | 剪映草稿导入，本文 |
-| 音色、背景音乐 | 从 `editing.context` 的资源目录选择 | 音色与个人音乐导入当前没有可用入口；用户自定义 BGM 预设依赖 BGM 素材库，当前可能尚未开放 |
+| 背景音乐 | `enable_background_music=true` 后用 `background_music_path` 选目录中的音乐 | 百度网盘分享导入，第 5 节 |
+| 配音音色 | 旁白 TTS 用 `tts_voice_preset_id`（或用 `tts_voice_name` 直接选单个音色） | 从当前项目节点音色目录组合，第 6 节 |
 | 视频背景、特效集、音效集 | 从 `editing.context` 的资源目录选择 | 使用目录中已有项，个人创建入口未开放 |
 
 剪辑风格属于剪辑配置预设，不在这里创建；它保存的是任务配置，并引用上面这些资源预设。系统预设只读。个人预设属于当前账号，可在自己的项目里选用；同名保存默认拒绝，必须明确覆盖。任何名称、ID 都应以保存后重读 `editing.context` 的资源目录为准，不要把展示名直接当参数值。
@@ -102,7 +103,78 @@ node scripts/mycutbuddy.mjs preset.style.import.submit --project <项目 ID> --r
 7. 每一项按它的实际用途命名，例如「顶部标题-黄字」「左下角角标-白字」「底部行动引导-红底」，然后逐项 `save-items`。
 8. 在任务里打开 `enable_global_subtitle`，把保存后的真实预设 ID 分别填入 `global_subtitle_style_0` 至 `_4`，文字内容填在对应的 `global_subtitle_text_0` 至 `_4`。内容留空的槽位不生效。
 
-## 5. 管理与排查
+## 5. 背景音乐预设（个人音乐）
+
+背景音乐预设是一条导入产出的**单条预设**：用户给这次导入起一个名字，分享里的音频全部发布在这条预设里。来源只能是百度网盘分享——这是唯一需要网盘的预设路径；本机文件不能直接变成音乐预设，也没有逐曲上传的入口。
+
+### 5.1 什么时候用
+
+- 用户想反复使用同一套 BGM、片头音乐或某个歌单，希望在多个任务里按名字选用。
+- 用户手上已有网盘分享（自己上传或别人给的），且这些音频有可用授权。
+- 用户没有网盘、或不愿为这一步开网盘：改用 `editing.context` 音乐目录里已有的音乐或系统预设，不要把「没有网盘」当成任务失败。
+
+### 5.2 准备与提交
+
+1. 分享里只放音频：支持 `.mp3`、`.wav`、`.m4a`、`.aac`、`.flac`、`.ogg`；其他文件由服务端列为排除项，不下载、不计费。按「一个主题 / 一套歌单」组织一次导入，一次导入就是一条预设。
+2. 用业务语言和用户确认预设名称和这一步的大致费用，再提交：
+
+```bash
+node scripts/mycutbuddy.mjs preset.music.import.submit --project <项目 ID> --confirm-charge \
+  --input '{"preset_name":"轻快开场","share_url":"https://pan.baidu.com/s/...","extraction_code":"..."}'
+```
+
+3. `preset_name` 就是发布后的预设名（最多 80 个字符），与已有活动预设同名会在受理前直接拒绝；换名称，或先归档旧预设。
+4. 发布格式统一为 MP3：本身是合法 MP3 且标称码率不超过 192 kbps 的保留原字节，其余转码。同一预设内按去扩展名的文件名去重，撞名自动加 ` (2)`、` (3)`，不要自己改文件名。
+
+### 5.3 费用与返还
+
+- **受理即扣费**：费用在受理时按冻结事实结算，不等发布完成。受理门槛是不低于 1 积分的可用余额；不足时不会创建导入，也不会开始下载。
+- 计费口径由服务端给出：D=下载音频数、S=新增来源数、C 恒为 0；CLI 只透出服务端事实，不报价、不预估。
+- 已扣费后、提交给节点前失败或用户取消：已扣积分**只退一次**。已经进入发布的导入若先完成发布，取消不会撤销这次扣费。
+- 同一用户同时只有一个活动导入（跨项目共用）：另一个项目正在导入时，本项目的受理会被拒绝，`preset.music.import.list` 的 `active_import_elsewhere` 会指出是哪个项目。一次导入统一 12 小时截止。
+- 导入进行期间（含「取消中」）不能改名或归档任何音乐预设，服务端会指出占用中的项目；不要重试或绕过。
+
+### 5.4 跟踪与使用
+
+```bash
+node scripts/mycutbuddy.mjs preset.music.import.get --project <项目 ID> --operation <导入 ID>
+node scripts/mycutbuddy.mjs preset.music.import.cancel --project <项目 ID> --operation <导入 ID>
+node scripts/mycutbuddy.mjs preset.music.list --project <项目 ID>
+node scripts/mycutbuddy.mjs preset.music.rename --project <项目 ID> --music-preset <预设 ID> --name <新名称>
+node scripts/mycutbuddy.mjs preset.music.archive --project <项目 ID> --music-preset <预设 ID>
+```
+
+- 阶段依次为 `preparing`（扫描与下载）、`prepared`（按真实文件核算并扣费）、`publishing`（发布到预设），终态是 `completed`、`failed`、`cancelled`；取消后停在 `cancelling`，直到节点确认清理。
+- 只有 `completed` 才代表预设已发布；带 `preset_sync_pending=true` 说明节点还没接受这份同步。`credit_cost`、`credit_status`、`refunded_credits`、`settlement_status` 是账本事实，退款义务还在处理时不要说成已退回。
+- 发布后 `preset.music.list` 给出真实 `preset_id`；取用任务时用 `editing.context` 音乐目录里的稳定 ID 填 `background_music_path`（`enable_background_music=true` 时生效），不要用名称或本地路径。
+- 归档后不能再用于新任务；本次归档释放的来源在下次导入时会重新算作新增来源。
+
+## 6. 配音音色预设
+
+音色预设是一份可复用的**配音音色组合**：只有旁白 TTS 会用到。它不改变字幕样式，也不是「克隆某人的声音」——成员只能来自当前项目节点真实可用的 TTS 音色目录。
+
+1. 先读目录：
+
+```bash
+node scripts/mycutbuddy.mjs preset.voice.list --project <项目 ID>
+```
+
+返回的 `voices[].id` / `voices[].name` 是当前节点真实的音色目录，`tts_provider` 是唯一接受的提供方。目录之外的音色、显示名当 ID 用、空目录，都会被服务端拒绝，不要自己编造音色 ID。
+
+2. 挑成员并定权重（正整数，成员不能重复；顺序就是保存后的顺序），新建：
+
+```bash
+node scripts/mycutbuddy.mjs preset.voice.create --project <项目 ID> \
+  --input '{"name":"温柔女声","definition":{"tts_provider":"doubao_tts_1_0","voices":[{"voice_type":"<voices[].id>","weight":2}]}}'
+```
+
+`voice_type` 必须来自上一步的目录；`weight` 是相对权重，不是百分比，也不要自己换算成时长或音量。同名个人预设已存在时返回 409，用户确认覆盖后才在那次输入里带 `"overwrite":true`。
+
+3. 编辑前先 `preset.voice.get` 读取原定义，再提交完整的名称与成员（不接受 `overwrite`）；改名撞上另一个预设会直接 409。删除用 `preset.voice.archive`，系统预设只读（403），已有任务不受影响。
+
+4. 使用：旁白的 `public_config` 里用 `tts_voice_preset_id` 选这份组合（与 `tts_voice_name` 二选一），音色来源必须是 `tts`。想帮用户省事时，单个音色直接给 `tts_voice_name` 就够，不必先建组合。
+
+## 7. 管理与排查
 
 - 改名、归档用 `preset.subtitle.list`、`preset.subtitle.update`、`preset.subtitle.archive`；改名不改变预设 ID，也不会改写已有任务。
 - 导入记录用 `preset.style.import.list` 查询；`preset.style.import.delete` 只软删终态导入记录，不删除已经保存的预设。

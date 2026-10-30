@@ -247,7 +247,7 @@ node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confir
 
 | 字段 | 怎么填 |
 |---|---|
-| `enable_background_music` | 默认关闭。背景音乐没有系统默认预设，只有用户自定义的 BGM 预设（通过 BGM 素材库上传，当前可能尚未开放）。需要时打开，并确认 `editing.context` 的资源目录里确实有可选音乐；目录为空时保持关闭。 |
+| `enable_background_music` | 默认关闭。背景音乐没有系统默认预设：用户自己的 BGM 只能按百度网盘分享导入成个人预设（导入即扣费，见[自定义资源预设](custom-presets.md)第 5 节）。需要时打开，并确认 `editing.context` 的资源目录里确实有可选音乐；目录为空时保持关闭，不要为此临时中断剪辑。 |
 | `background_music_path` | 从资源目录选真实 ID；没有可选音乐时保持关闭，不要编造 ID 或填写本机路径。 |
 | `background_music_volume` | 0–100，默认 24；口播为主时通常 15–30，语音为0时可设100。 |
 | `clean_material_audio_volume` | 见「文案与配音」表，控制同期声。 |
