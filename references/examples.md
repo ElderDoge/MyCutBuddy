@@ -204,7 +204,7 @@
 
 ```text
 优先使用真实视频素材，图片只在确实缺少合适视频时少量补充；
-XXXX段落只用XX目录里的素材，先试用XX画面，再接XX画面。
+XXXX段落只用XX目录里的素材，先使用XX画面，再接XX画面。
 ```
 
 ### 4.3 旁白：已有配音
@@ -228,7 +228,7 @@ XXXX段落只用XX目录里的素材，先试用XX画面，再接XX画面。
 | 想要 | 正确 | 错误 |
 |---|---|---|
 | 有明确文案 | 填 `script`，系统按文案选段并生成字幕 | 把文案写进 `instruction` |
-| 只有主题、时长和结尾要求 | 填 `instruction`，不生成配音；不建议使用这条路径，应先和用户确定具体文案，再填 `script | 只把一句主题当 `script` 提交，成片只有这几个字；或 `instruction` 不写时长和结尾 |
+| 只有主题、时长和结尾要求 | 填 `instruction`，不生成配音；不建议使用这条路径，应先和用户确定具体文案，再填 `script` | 只把一句主题当 `script` 提交，成片只有这几个字；或 `instruction` 不写时长和结尾 |
 | 某一行只用一个场景 | 在该行 `public_overrides.material_matching_requirements` 里限定 | 写在统一 `public_config.material_matching_requirements`，结果所有行都被限制 |
 | 叠加产品画面 | `use_primary_overlay=true`，并确保主库索引就绪 | 只打开 `use_primary_overlay=true`，主库没索引，提交会被前置条件挡住 |
 | 不叠加画面 | `use_primary_overlay=false`，主库不必索引 | 为了不叠加去清空或删除主素材库 |

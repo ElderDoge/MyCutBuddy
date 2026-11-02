@@ -9,8 +9,8 @@
 | 语音字幕样式 | `dialogue_subtitle_style` | 剪映草稿导入，本文 |
 | 固定文字样式 | `enable_global_subtitle=true` 后用于 `global_subtitle_style_0` 至 `_4` | 剪映草稿导入，本文 |
 | 背景音乐 | `enable_background_music=true` 后用 `background_music_path` 选目录中的音乐 | 百度网盘分享导入，第 5 节 |
-| 配音音色 | 旁白 TTS 用 `tts_voice_preset_id`（或用 `tts_voice_name` 直接选单个音色） | 从当前项目节点音色目录组合，第 6 节 |
-| 视频背景、特效集、音效集 | 从 `editing.context` 的资源目录选择 | 使用目录中已有项，个人创建入口未开放 |
+| 配音音色 | 旁白 TTS 用 `tts_voice_preset_id`（或用 `tts_voice_name` 直接选单个音色） | 从当前项目可用的音色目录组合，第 6 节 |
+| 视频背景、特效集、音效集 | 从 `editing.context` 的资源目录选择 | 使用目录中已有项；个人自助编辑入口未开放，如需专属定制见 [常见问题与官方服务](faq.md) |
 
 剪辑风格属于剪辑配置预设，不在这里创建；它保存的是任务配置，并引用上面这些资源预设。系统预设只读。个人预设属于当前账号，可在自己的项目里选用；同名保存默认拒绝，必须明确覆盖。任何名称、ID 都应以保存后重读 `editing.context` 的资源目录为准，不要把展示名直接当参数值。
 
@@ -130,7 +130,7 @@ node scripts/mycutbuddy.mjs preset.music.import.submit --project <项目 ID> --c
 
 - **受理即扣费**：费用在受理时按冻结事实结算，不等发布完成。受理门槛是不低于 1 积分的可用余额；不足时不会创建导入，也不会开始下载。
 - 计费口径由服务端给出：D=下载音频数、S=新增来源数、C 恒为 0；CLI 只透出服务端事实，不报价、不预估。
-- 已扣费后、提交给节点前失败或用户取消：已扣积分**只退一次**。已经进入发布的导入若先完成发布，取消不会撤销这次扣费。
+- 已扣费后、开始处理前失败或用户取消：已扣积分**只退一次**。已经进入发布的导入若先完成发布，取消不会撤销这次扣费。
 - 同一用户同时只有一个活动导入（跨项目共用）：另一个项目正在导入时，本项目的受理会被拒绝，`preset.music.import.list` 的 `active_import_elsewhere` 会指出是哪个项目。一次导入统一 12 小时截止。
 - 导入进行期间（含「取消中」）不能改名或归档任何音乐预设，服务端会指出占用中的项目；不要重试或绕过。
 
@@ -144,14 +144,14 @@ node scripts/mycutbuddy.mjs preset.music.rename --project <项目 ID> --music-pr
 node scripts/mycutbuddy.mjs preset.music.archive --project <项目 ID> --music-preset <预设 ID>
 ```
 
-- 阶段依次为 `preparing`（扫描与下载）、`prepared`（按真实文件核算并扣费）、`publishing`（发布到预设），终态是 `completed`、`failed`、`cancelled`；取消后停在 `cancelling`，直到节点确认清理。
-- 只有 `completed` 才代表预设已发布；带 `preset_sync_pending=true` 说明节点还没接受这份同步。`credit_cost`、`credit_status`、`refunded_credits`、`settlement_status` 是账本事实，退款义务还在处理时不要说成已退回。
+- 阶段依次为 `preparing`（扫描与下载）、`prepared`（按真实文件核算并扣费）、`publishing`（发布到预设），终态是 `completed`、`failed`、`cancelled`；取消后停在 `cancelling`，直到服务端确认清理完成。
+- 只有 `completed` 才代表预设已发布；带 `preset_sync_pending=true` 说明服务端还在同步这份预设。`credit_cost`、`credit_status`、`refunded_credits`、`settlement_status` 是账本事实，退款义务还在处理时不要说成已退回。
 - 发布后 `preset.music.list` 给出真实 `preset_id`；取用任务时用 `editing.context` 音乐目录里的稳定 ID 填 `background_music_path`（`enable_background_music=true` 时生效），不要用名称或本地路径。
 - 归档后不能再用于新任务；本次归档释放的来源在下次导入时会重新算作新增来源。
 
 ## 6. 配音音色预设
 
-音色预设是一份可复用的**配音音色组合**：只有旁白 TTS 会用到。它不改变字幕样式，也不是「克隆某人的声音」——成员只能来自当前项目节点真实可用的 TTS 音色目录。
+音色预设是一份可复用的**配音音色组合**：只有旁白 TTS 会用到。它不改变字幕样式，也不是「克隆某人的声音」——成员只能来自当前项目真实可用的 TTS 音色目录。
 
 1. 先读目录：
 
@@ -159,7 +159,7 @@ node scripts/mycutbuddy.mjs preset.music.archive --project <项目 ID> --music-p
 node scripts/mycutbuddy.mjs preset.voice.list --project <项目 ID>
 ```
 
-返回的 `voices[].id` / `voices[].name` 是当前节点真实的音色目录，`tts_provider` 是唯一接受的提供方。目录之外的音色、显示名当 ID 用、空目录，都会被服务端拒绝，不要自己编造音色 ID。
+返回的 `voices[].id` / `voices[].name` 是当前项目真实的音色目录，`tts_provider` 是唯一接受的提供方。目录之外的音色、显示名当 ID 用、空目录，都会被服务端拒绝，不要自己编造音色 ID。
 
 2. 挑成员并定权重（正整数，成员不能重复；顺序就是保存后的顺序），新建：
 

@@ -138,11 +138,11 @@ node scripts/mycutbuddy.mjs material.upload --project <项目 ID> --library prim
   --path <本地文件或目录> [--path ...] [--target-directory <库内目录>] --confirm-charge
 ```
 
-- 素材在用户电脑上时默认直传：一条命令完成「本地清单 → 服务端复核 → 受理 → 分片直传 → 请求封存 → 等待真实导入终态」，整个过程持续续租；素材在网盘、或直传不可用时改用下面的网盘分享导入。索引仍是独立后续动作，不由上传命令自动提交。
+- 素材在用户电脑上时默认直传：一条命令完成「本地清单 → 服务端复核 → 受理 → 分片直传 → 完成上传提交 → 等待真实导入终态」，整个过程保持上传会话；素材在网盘、或直传不可用时改用下面的网盘分享导入。索引仍是独立后续动作，不由上传命令自动提交。
 - `--path` 可重复；目录保留子目录层级，同一目录下重复的相对路径会被本地拒绝。符号链接与非普通文件在本地拒绝；白名单外文件由服务端列为排除项（不传、不计费），非法名称与超过 6 级的目录仍整批拒绝。
-- 未带 `--confirm-charge` 不会发出受理请求。CLI 不预报价：节点封存真实文件后由服务端按导入公式一次核价，与其他导入同价同公式。
+- 未带 `--confirm-charge` 不会发出受理请求。CLI 不预报价：服务端接收完真实文件后按导入公式一次核价，与其他导入同价同公式。
 - 一次运行就是一个上传会话：中断、权威拒绝或进程结束时会尽力终止，**不跨运行续传**；重跑是新会话，不复用旧字节与旧令牌。
-- 输出只有上传编号、请求编号、库类型、接受/排除清单、字节、真实终态与计费事实，不含上传令牌、tus 地址或节点路径。uploaded、prepared、submitted 都只是进度，CLI 持续运行到 completed 才返回成功，failed 或 cancelled 返回失败；成功后再读 material.directory 核对入库。
+- 输出只有上传编号、请求编号、库类型、接受/排除清单、字节、真实终态与计费事实，不含上传令牌、内部上传地址或服务端本地路径。uploaded、prepared、submitted 都只是进度，CLI 持续运行到 completed 才返回成功，failed 或 cancelled 返回失败；成功后再读 material.directory 核对入库。
 - 受理门槛与网页相同：同库只有一个在途素材工作、项目有未终态剪辑时拒绝、按库最低余额。
 
 ### 素材导入与索引
@@ -163,7 +163,7 @@ node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confir
 
 只有主素材库接受镜头参数。人物口播库只索引，传 `shot_mode` 或 `additional_prompt` 会被本地拒绝；语音配音库没有索引。
 
-先读 `material.directory --library primary`，它返回 `unprocessed_video_count`（未处理视频数）、节点能力与当前提示版本，以及 `shot_processing` 的阶段、失败阶段、安全摘要、独立处理/索引任务身份、费用和差额。按真实状态三选一；有新未处理视频时优先处理新源，旧暂停记录不能覆盖新库事实：
+先读 `material.directory --library primary`，它返回 `unprocessed_video_count`（未处理视频数）、镜头处理支持状态与当前提示版本，以及 `shot_processing` 的阶段、失败阶段、安全摘要、独立处理/索引任务身份、费用和差额。按真实状态三选一；有新未处理视频时优先处理新源，旧暂停记录不能覆盖新库事实：
 
 | 状态 | 提交 |
 |---|---|
@@ -276,10 +276,10 @@ node scripts/mycutbuddy.mjs preset.voice.update --project <项目 ID> --voice-pr
 node scripts/mycutbuddy.mjs preset.voice.archive --project <项目 ID> --voice-preset <预设 ID>
 ```
 
-- 背景音乐导入是**唯一需要网盘的预设路径**：来源只能是百度网盘分享，受理即扣费（受理门槛 ≥1 积分），已扣费后提交前失败或取消只退一次；一次导入产出单条同名预设，同一用户同时只有一个活动导入、统一 12 小时截止。音频统一发布 MP3（合法且标称码率 ≤192 kbps 保留原字节，其余转码），同一预设内按去扩展名的名称去重，撞名自动加 ` (2)` 等序号。费用口径与流程见 [自定义资源预设](custom-presets.md) 第 5 节，积分口径见 [积分与计费](billing.md)。
+- 背景音乐导入是**唯一需要网盘的预设路径**：来源只能是百度网盘分享，受理即扣费（受理门槛 ≥1 积分），已扣费后开始处理前失败或取消只退一次；一次导入产出单条同名预设，同一用户同时只有一个活动导入、统一 12 小时截止。音频统一发布 MP3（合法且标称码率 ≤192 kbps 保留原字节，其余转码），同一预设内按去扩展名的名称去重，撞名自动加 ` (2)` 等序号。费用口径与流程见 [自定义资源预设](custom-presets.md) 第 5 节，积分口径见 [积分与计费](billing.md)。
 - `preset_name` 与活动预设同名会在受理前被拒绝（409）；导入期间（含取消中）改名与归档都会被拒绝。`--notice-version` 省略时使用站点当前公布的版本；站点更新后会以「计费提示已更新」拒绝，此时按站点提示重新确认。`--submission-key` 省略时自动生成并在本机保留待用记录，丢响应后用相同输入重放即可复用同一次导入。
-- `preset.music.import.get` 的 `status` 依次是 `preparing`、`prepared`、`publishing`，终态 `completed`、`failed`、`cancelled`；取消后停在 `cancelling` 直至节点确认清理。只有 `completed` 代表预设已发布，`preset_sync_pending=true` 表示节点尚未接受同步；`credit_cost`、`credit_status`、`refunded_credits`、`settlement_status` 是账本事实。
-- 音色组合的 `definition` 只能是 `{tts_provider:"doubao_tts_1_0", voices:[{voice_type, weight}]}`；`voice_type` 必须取自 `preset.voice.list` 返回的 `voices[].id`（当前项目节点真实目录），`weight` 为正整数、成员不可重复。目录之外、显示名当 ID、空目录都会被服务端拒绝，不要编造音色 ID。
+- `preset.music.import.get` 的 `status` 依次是 `preparing`、`prepared`、`publishing`，终态 `completed`、`failed`、`cancelled`；取消后停在 `cancelling` 直至服务端确认清理完成。只有 `completed` 代表预设已发布，`preset_sync_pending=true` 表示预设同步尚未完成；`credit_cost`、`credit_status`、`refunded_credits`、`settlement_status` 是账本事实。
+- 音色组合的 `definition` 只能是 `{tts_provider:"doubao_tts_1_0", voices:[{voice_type, weight}]}`；`voice_type` 必须取自 `preset.voice.list` 返回的 `voices[].id`（当前项目真实音色目录），`weight` 为正整数、成员不可重复。目录之外、显示名当 ID、空目录都会被服务端拒绝，不要编造音色 ID。
 - `preset.voice.create` 只接受 `name`、`definition` 与可选 `overwrite`（同名 409，用户确认覆盖后才带）；`preset.voice.update` 只接受 `name` 与 `definition`，先读取原定义再提交完整成员。系统预设只读（403）。旁白里用 `tts_voice_preset_id` 引用这份组合，或直接用 `tts_voice_name` 选单个音色。
 
 ### 旁白
@@ -363,9 +363,9 @@ node scripts/mycutbuddy.mjs delivery.info --project <项目 ID>
 ```
 
 - 余额、状态与积分记录只读。实际费用与退款口径见 [积分与计费](billing.md)。
-- 下载优先用 `delivery.download --download-id <download_id> --out <保存路径>`：直接用 Agent 凭据从节点取封存 ZIP，写完即该包网页交付成功。只接受 `task.get`/`task.list` 里 `downloads[].download_id`（`state` 为 `available` 或 `completed` 时才有），不接受路径或链接；下载不完整时不保留文件，可重试。
+- 下载优先用 `delivery.download --download-id <download_id> --out <保存路径>`：直接用 Agent 凭据从网站取草稿压缩包，写完即该包网页交付成功。只接受 `task.get`/`task.list` 里 `downloads[].download_id`（`state` 为 `available` 或 `completed` 时才有），不接受路径或链接；下载不完整时不保留文件，可重试。
 - `delivery.info` 报告项目固定分享入口与提取码，尚未生成时返回空值。任务包名、成员、上传与过期时间由 `task.get`/`task.list` 的交付事实给出；不得用元数据声称已下载或已安装。
-- 网盘是替代路径（节点离线或用户要求网盘时），交给官方 `baidu-drive` Skill。下载必须结合任务 `artifact` 的真实 `file_name`、`uploaded_at`、`expires_at` 与成功成员，不自行按任务名称猜另一个包；项目分享包含其他包时只取用户需要的任务包。封存 ZIP 与网盘包都只保留 30 天，过期会被清理。
+- 网盘是替代路径（直下暂不可用或用户要求网盘时），交给官方 `baidu-drive` Skill。下载必须结合任务 `artifact` 的真实 `file_name`、`uploaded_at`、`expires_at` 与成功成员，不自行按任务名称猜另一个包；项目分享包含其他包时只取用户需要的任务包。网站直下草稿包与网盘包都只保留 30 天，过期会被清理。
 - 本地压缩包交给 `delivery.inspect`、`delivery.extract`、`delivery.install`。结果分三段报告：`extracted`、`installed`、`jianying_recognition`。下载成功、文件安装成功、剪映实际识别成功是三件事，分别如实说明。
 
 ## 6. 命令清单
@@ -491,7 +491,7 @@ credits.transactions [--page 1] [--limit 10] [--type purchase|consumption|refund
 ## 7. 交付与本地安装
 
 - `delivery.info` 报告项目交付分享入口与提取码；任务包名、成员、上传与过期时间由 `task.get`/`task.list` 的任务交付事实给出。只有元数据时不得声称已下载或已安装。
-- `delivery.download --download-id <download_id> --out <保存路径>` 直接从网站下载封存 ZIP（`stages.downloaded=confirmed` 才代表本机已有文件），父目录必须已存在；网盘替代路径交给官方 `baidu-drive` Skill。
+- `delivery.download --download-id <download_id> --out <保存路径>` 直接从网站下载草稿压缩包（`stages.downloaded=confirmed` 才代表本机已有文件），父目录必须已存在；网盘替代路径交给官方 `baidu-drive` Skill。
 - `delivery.inspect` 在写入前预检：加密条目、ZIP64、不支持的压缩方式、路径穿越、绝对路径、越界链接、超限体积一律拒绝。
 - `delivery.extract --package <包> --target <目标目录>`：只解压到不存在的新目录，失败时不留下部分产物。
 - `delivery.install --package <包> --drafts-dir <剪映草稿目录> [--name <草稿目录名>]`：把包内每条草稿分别安装为剪映草稿目录，批量包按草稿并排安装、不会折叠成一个剪映无法识别的包壳目录；结果 `drafts` 数组逐条给出 `draft_name`、`installed_path` 与该草稿自身计数。任一草稿重名时整批拒绝（`draft_conflict`）而不是覆盖，也不留下部分安装；`--name` 只对单草稿包有效，多草稿包会返回 `name_requires_single_draft`；不改写草稿 JSON 或 UUID。

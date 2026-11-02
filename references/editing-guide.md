@@ -9,7 +9,7 @@
 
 ## 0. 先聊清要做什么
 
-剪辑要求不会自己出现，开工前先自然地跟用户聊清楚：
+（注：若用户是第一次使用剪搭子且尚未跑通首条草稿，请先按 [首次使用快速指引](first-use.md) 极简引导并用默认配置试剪一条，不要按下面清单逐项盘问；等用户看过首条效果后再按本节细聊。）剪辑要求不会自己出现，日常使用时开工前先自然地跟用户聊清楚：
 
 - 做的是什么内容、给谁看，要几条、每条大概多长。
 - 谁在说话：AI 配音（需要文案）、用户自己录的配音，还是真人出镜。
@@ -53,7 +53,7 @@ node scripts/mycutbuddy.mjs material.upload --project <项目 ID> --library prim
   --path "素材/产品A" --confirm-charge
 ```
 
-子目录层级会保留，格式不合的文件由服务端列为排除项（不传、不计费）；中断或失败不会跨运行续传，重跑就是一次新的上传。字节传完后 CLI 仍持续续租并等待真实导入结束，不要关闭进程。uploaded、prepared、submitted 只是进度，只有服务端 completed 才返回成功；随后读素材库目录核对入库，再按需要单独索引。
+子目录层级会保留，格式不合的文件由服务端列为排除项（不传、不计费）；中断或失败不会跨运行续传，重跑就是一次新的上传。字节传完后 CLI 仍保持会话并等待真实导入结束，不要关闭进程。uploaded、prepared、submitted 只是进度，只有服务端 completed 才返回成功；随后读素材库目录核对入库，再按需要单独索引。
 
 素材在网盘、或本机无法上传时，用官方 `baidu-drive` Skill 上传并生成分享链接、提取码，再把链接交给剪搭子导入（见 2.3）。**建议把素材整理放在上传之前**：导入后要整理也可以，但整理能力较少，通常只能整个文件夹移动或改名。
 
@@ -151,7 +151,7 @@ node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confir
 
 三类风格目录互相独立，只能在同一形式的目录里选择：`narration`、`talking_head_segment`、`talking_head_full`。
 
-剪辑前先确认风格：读取账号的风格预设列表，把已保存的个人风格预设（含按项目、题材或产品命名的）用效果语言讲给用户，确认这次用哪一个。用户没有明确偏好时也要先给选项再定，不要直接默默套系统默认风格。确认后再以该风格为底，按用户提出的节奏、画面或特效偏好调整字段。
+日常剪辑前先确认风格（首次使用试剪时按 [首次使用快速指引](first-use.md) 直接推荐系统默认风格）：读取账号的风格预设列表，把已保存的个人风格预设（含按项目、题材或产品命名的）用效果语言讲给用户，确认这次用哪一个。用户没有明确偏好时也要先给选项再定，不要直接默默套系统默认风格。确认后再以该风格为底，按用户提出的节奏、画面或特效偏好调整字段。
 
 1. `editing.context --project <项目 ID>` 读取公开字段元数据、资源目录、三类风格列表、当前余额和计费提示版本。
 2. `preset.style.list --project <项目 ID> --form <形式>` 选风格；`preset.style.get` 取得该风格的完整 `public_config`（口播风格还会带 `use_primary_overlay`）。
@@ -219,8 +219,8 @@ node scripts/mycutbuddy.mjs material.index.submit --project <项目 ID> --confir
 |---|---|---|
 | `material_matching_requirements` | 选画面的文字要求 | 根据实际需求填写，留空保持默认均衡规则 |
 | `candidate_keep_ratio_percent` | 每次从全部候选中随机抽取多大比例参与剪辑，用来控制剪辑效率和降低大量剪辑时的重复性，10–100。 | 素材很多或想控制费用时降到 30–60；素材很少或要求高时保持 80–100。逻辑：在确保素材足够完成本视频剪辑的基础上，越低就越能控制重复性和降低成本 |
-| `max_usage_count` | 素材使用次数阈值，0–500。未达阈值时不会排除，达到阈值后可能排除。 | 默认 5；根据用户要求和预计制作规模决定。同一镜头反复出现时降低阈值。 |
-| `top_usage_exclude_percent` | 按比例排除高频素材，除非阈值未达设定值。0–100 | 默认 10；想更强去重时提高，建议最高不超过50%，否则可能没有足够的合适画面可用。0 表示达到阈值就全部排除。 |
+| `max_usage_count` | 素材使用次数阈值，0–500。未达阈值时不会排除；达到或超过阈值且排名落入下方高频比例时才会动态排除。 | 默认 5；同一套文案批量出片防雷同时可调低（如 `3`），详见 [常见问题与官方服务](faq.md) Q1。 |
+| `top_usage_exclude_percent` | 动态高频排除比例，0–100。将「已达使用次数阈值」且「在全库使用次数排名前 X%」的素材暂时排除；后续其他素材使用次数涨上来、该素材排名掉出前 X% 后会自动重新放开可用。 | 默认 10；想更强去重时提高（如配合阈值 3 设为 `30`），建议最高不超过 50%，否则可能没有足够的合适画面可用。`0` 表示达到阈值就全部排除。 |
 | `enable_folder_candidate_ratio_control` | 按目录分别控制素材参与比例。 | 默认关闭。只有确实要按目录取舍素材时才打开；打开并填写至少一项后，未配置的目录会被全部排除；配置留空时整个目录筛选不生效。 |
 | `folder_candidate_keep_ratios` | 各目录的保留比例，与总比例叠加作用。 | 按 `相对目录:比例` 填写，格式和示例见下方说明。 |
 | `visual_segmentation_prompt` | 画面切换节奏 | 留空为默认节奏，可填入较快或较慢，也可以用时间或字数来精确描述，例如「开头 3 秒每 5–8 个字切换；产品特写停 X 秒」。 |
@@ -363,14 +363,13 @@ node scripts/mycutbuddy.mjs task.watch --project <项目 ID> --task <执行任�
 ```
 
 - 请求状态：`quoting`、`ready`、`submitted`、`failed`、`cancelled`。`submitted` 只表示执行任务已创建，不是剪辑完成。
-- 任务状态：`preparing`、`test_running`、`formal_running`、`test_uploading`、`formal_uploading` 为进行中；`completed`、`partial_completed`、`test_succeeded`、`failed`、`test_failed`、`cancelled` 为终态。`test_succeeded` 是测试结果，不是正式草稿；`local_demo` 装在执行节点，不在用户电脑。
+- 任务状态：`preparing`、`test_running`、`formal_running`、`test_uploading`、`formal_uploading` 为进行中；`completed`、`partial_completed`、`test_succeeded`、`failed`、`test_failed`、`cancelled` 为终态。`test_succeeded` 是测试结果，不是正式草稿；`local_demo` 是服务端本地演示标记，不在用户电脑。
 - 取消边界与退款口径见[积分](billing.md)第 4 节；退款一律以服务端账本为准，不自行承诺全退。
 - 停止查询不等于取消；受理取消不等于清理完成。取消后要跟到终态。
 
 ## 8. 交付到剪映
 
-任务进入 `completed` 后，从 `task.get`/`task.list` 读取 `artifact` 的真实包名、成功成员和过期时间，用项目分享入口与提取码交给 `baidu-drive` Skill 下载。项目分享里可能有其他任务的包，只取本任务需要的包。
-
+批量任务按包交付，**不必等任务进入 `completed`**：每个草稿包打包就绪后，`task.get`/`task.list` 的 `downloads[]` 里就会出现 `state=available` 的包，优先取其 `download_id` 用 `delivery.download` 直接从网站下载（不经过网盘）；只有直下暂不可用或用户明确要求网盘时，才读取 `artifact` 的真实包名、成功成员和过期时间，用 `delivery.info` 的项目分享入口与提取码交给 `baidu-drive` Skill 下载（只取本任务需要的包）。任务仍在运行时按 `package_index` 顺序继续取后续包。
 下载后：
 
 1. `delivery.inspect` 预检压缩包。
