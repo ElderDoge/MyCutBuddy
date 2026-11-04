@@ -378,7 +378,7 @@ node scripts/mycutbuddy.mjs task.watch --project <项目 ID> --task <执行任�
    - Windows：`%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft`（即 `C:\Users\<用户名>\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft`）。
    - macOS：`~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft`。
    - 只有用户改过「全局设置 → 草稿位置」时，才使用用户提供的实际路径。
-4. 安装前先关闭剪映。安装完成后告诉用户：打开剪映，在首页按**今天的日期**（例如 `2026-10-20`）查找本批草稿。
+4. 安装前先关闭剪映。安装完成后告诉用户：打开剪映，在首页草稿列表上方的**搜索框内输入 MMDD 形式的日期**（例如 11 月 1 日输入 `1101`，12 月 20 日输入 `1220`）筛选本批草稿。
 5. 若草稿打开异常（有时与安装时剪映正开着有关），关闭剪映后重新安装草稿，再重新打开剪映；若同名草稿阻止安装，先删除这次刚安装的异常草稿目录再重装。
 6. 建议用户在剪映全局设置中关闭草稿自动备份：它会在后台持续打开新草稿，而新草稿首次打开又很慢，会导致剪映卡到不能动弹。
 

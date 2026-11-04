@@ -576,7 +576,7 @@ function normalizeSite(raw = DEFAULT_SITE) {
 }
 
 // packages/mycutbuddy-cli/src/core/version.ts
-var CLI_VERSION = "0.4.6";
+var CLI_VERSION = "0.4.7";
 
 // packages/mycutbuddy-cli/src/core/device-auth.ts
 function readString(body, key) {
